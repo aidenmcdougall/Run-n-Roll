@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: runnroll-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-runnroll}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-runnroll}
+      POSTGRES_DB: ${POSTGRES_DB:-runnroll}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-runnroll} -d ${POSTGRES_DB:-runnroll}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Downloaded datasets (large, reproducible via `npm run data:download`)
+data/raw/*
+!data/raw/.gitkeep

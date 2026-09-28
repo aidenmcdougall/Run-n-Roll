@@ -1,0 +1,72 @@
+/**
+ * Types for the backend REST API. These mirror the response shapes produced
+ * by backend/src/http/routers/*; keep them in sync when the API changes.
+ */
+
+export type InfraCategory =
+  | 'shared_use_path'
+  | 'separated_path'
+  | 'protected_lane'
+  | 'buffered_lane'
+  | 'painted_lane'
+  | 'shared_parking_lane'
+  | 'shared_street'
+  | 'informal'
+  | 'unknown';
+
+export type EdgeKind = InfraCategory | 'connector';
+
+export type LngLatTuple = [lng: number, lat: number];
+
+export interface LngLatPoint {
+  lng: number;
+  lat: number;
+}
+
+export interface RoutingProfile {
+  id: string;
+  label: string;
+  description: string;
+  kindMultipliers: Record<EdgeKind, number>;
+  hazardMultipliers: Record<string, number>;
+  surfaceMultipliers: Record<string, number>;
+  respectOneWay: boolean;
+}
+
+export interface ProfilesResponse {
+  defaultProfile: string;
+  profiles: RoutingProfile[];
+}
+
+export interface RouteLeg {
+  kind: EdgeKind;
+  name: string | null;
+  lengthM: number;
+}
+
+export interface RouteFeature {
+  type: 'Feature';
+  geometry: { type: 'LineString'; coordinates: LngLatTuple[] };
+  properties: {
+    profile: string;
+    distanceM: number;
+    cost: number;
+    legs: RouteLeg[];
+    distanceByKind: Partial<Record<EdgeKind, number>>;
+    snap: {
+      start: { point: LngLatTuple; distanceM: number };
+      end: { point: LngLatTuple; distanceM: number };
+    };
+  };
+}
+
+export interface NetworkInfo {
+  status: 'loading' | 'empty' | 'ready' | 'error';
+  latestImport: { id: number; path_count: number; imported_at: string } | null;
+  graph: { segments: number; nodes: number; edges: number; connectors: number; components: number } | null;
+  error?: string;
+}
+
+export interface ApiErrorBody {
+  error: { code: string; message: string; details?: unknown };
+}
