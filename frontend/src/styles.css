@@ -102,3 +102,29 @@ code { font-size: 12px; background: rgba(0, 0, 0, 0.06); padding: 1px 4px; borde
 .segmented-full button { flex: 1; padding: 6px 8px; font-size: 13px; }
 .checkbox-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
 .checkbox-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+
+/* Activity scores */
+.scores { display: flex; flex-direction: column; gap: 8px; }
+.score-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.score-card-button { padding: 0; border: 0; background: none; text-align: left; cursor: pointer; border-radius: 10px; }
+.score-card-button[aria-expanded='true'] .score-card { outline: 2px solid var(--fg); outline-offset: -2px; }
+.score-card { --tone: #6b7280; border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--tone) 10%, #fff); border: 1px solid color-mix(in srgb, var(--tone) 30%, #fff); }
+.score-card.rating-great { --tone: #15803d; }
+.score-card.rating-good { --tone: #2563eb; }
+.score-card.rating-fair { --tone: #d97706; }
+.score-card.rating-poor { --tone: #dc2626; }
+.score-card-head { font-size: 13px; font-weight: 600; }
+.score-value { font-size: 30px; font-weight: 750; line-height: 1.1; color: var(--tone); font-variant-numeric: tabular-nums; }
+.score-max { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+.score-rating { font-size: 13px; font-weight: 600; color: var(--tone); }
+.score-confidence { font-size: 11px; color: var(--muted); text-transform: capitalize; }
+.score-details { background: #f9fafb; border-radius: 8px; padding: 8px 10px; }
+.score-notes { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.score-notes li { display: flex; gap: 6px; align-items: baseline; }
+.note-icon { width: 12px; flex-shrink: 0; font-weight: 700; }
+.note-positive .note-icon { color: #15803d; }
+.note-negative .note-icon { color: #dc2626; }
+.note-text { flex: 1; }
+.note-points { color: #dc2626; font-variant-numeric: tabular-nums; font-size: 12px; }
+.score-suggestion { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.score-suggestion button { white-space: nowrap; background: #fff; }

@@ -62,6 +62,24 @@ export interface RouteLeg {
   lengthM: number;
 }
 
+export type Rating = 'great' | 'good' | 'fair' | 'poor';
+
+export interface ScoreNote {
+  tone: 'positive' | 'negative';
+  text: string;
+  metres: number;
+  /** Score points this cause cost (negative notes). */
+  points?: number;
+}
+
+export interface ActivityScore {
+  score: number;
+  rating: Rating;
+  /** How much of the surface along the route is tagged rather than assumed. */
+  confidence: 'high' | 'medium' | 'low';
+  notes: ScoreNote[];
+}
+
 export interface RouteFeature {
   type: 'Feature';
   geometry: { type: 'LineString'; coordinates: LngLatTuple[] };
@@ -70,6 +88,7 @@ export interface RouteFeature {
     preferences: RoutePreferences;
     /** Metres still on surfaces the preferences avoid (there was no alternative). */
     avoidedSurfaceM: number;
+    scores: { skate: ActivityScore; run: ActivityScore };
     distanceM: number;
     cost: number;
     legs: RouteLeg[];

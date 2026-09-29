@@ -1,4 +1,4 @@
-import { SURFACE_CLASSES, type SurfaceClass } from '../domain/surface.js';
+import { SURFACE_CLASSES, type Smoothness, type SurfaceClass } from '../domain/surface.js';
 import { aStar, type SearchSpace } from './astar.js';
 import { cumulativeLengths, haversineXY, slicePolyline, type LngLat } from './geo.js';
 import { edgeCoordinates, edgeDirection, getEdge, type GraphEdge, type RoutingGraph } from './graph.js';
@@ -28,6 +28,20 @@ export interface RouteLeg {
   readonly lengthM: number;
 }
 
+/**
+ * A stretch of the route with uniform attributes (consecutive edges with the
+ * same kind, surface, smoothness and hazards are merged). The input to route
+ * scoring.
+ */
+export interface RouteStretch {
+  readonly kind: EdgeKind;
+  readonly surfaceClass: SurfaceClass;
+  readonly surfaceInferred: boolean;
+  readonly smoothness: Smoothness | null;
+  readonly hazards: readonly string[];
+  readonly lengthM: number;
+}
+
 export interface RoutePlan {
   readonly coordinates: LngLat[];
   readonly distanceM: number;
@@ -41,6 +55,8 @@ export interface RoutePlan {
   readonly distanceBySurface: Partial<Record<SurfaceClass, number>>;
   /** Metres whose surface class was inferred rather than tagged. */
   readonly inferredSurfaceM: number;
+  /** The route as uniform stretches, in travel order. */
+  readonly stretches: RouteStretch[];
   readonly start: SnappedPoint;
   readonly end: SnappedPoint;
   readonly nodesSettled: number;
@@ -314,8 +330,16 @@ export function planRoute(
   const legs: RouteLeg[] = [];
   const distanceByKind: Partial<Record<EdgeKind, number>> = {};
   const distanceBySurface: Partial<Record<SurfaceClass, number>> = {};
+  const stretches: RouteStretch[] = [];
   let distanceM = 0;
   let inferredSurfaceM = 0;
+
+  const sameStretch = (a: RouteStretch, e: GraphEdge): boolean =>
+    a.kind === e.kind &&
+    a.surfaceClass === e.surfaceClass &&
+    a.surfaceInferred === e.surfaceInferred &&
+    a.smoothness === e.smoothness &&
+    a.hazards.join() === e.hazards.join();
 
   const append = (edge: GraphEdge, piece: LngLat[], lengthM: number): void => {
     // Consecutive pieces share their joining vertex; don't duplicate it.
@@ -330,6 +354,19 @@ export function planRoute(
       legs[legs.length - 1] = { ...last, lengthM: last.lengthM + lengthM };
     } else {
       legs.push({ kind: edge.kind, name: edge.name, lengthM });
+    }
+    const lastStretch = stretches[stretches.length - 1];
+    if (lastStretch && sameStretch(lastStretch, edge)) {
+      stretches[stretches.length - 1] = { ...lastStretch, lengthM: lastStretch.lengthM + lengthM };
+    } else {
+      stretches.push({
+        kind: edge.kind,
+        surfaceClass: edge.surfaceClass,
+        surfaceInferred: edge.surfaceInferred,
+        smoothness: edge.smoothness,
+        hazards: edge.hazards,
+        lengthM,
+      });
     }
   };
 
@@ -368,6 +405,7 @@ export function planRoute(
       distanceByKind,
       distanceBySurface,
       inferredSurfaceM,
+      stretches,
       start,
       end,
       nodesSettled: result.settled,

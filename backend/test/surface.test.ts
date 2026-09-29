@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifySurface, effectiveSurface, surfaceClassSql } from '../src/domain/surface.js';
+import { classifySurface, effectiveSurface, parseSmoothness, surfaceClassSql } from '../src/domain/surface.js';
 
 describe('classifySurface', () => {
   it.each([
@@ -57,5 +57,14 @@ describe('surfaceClassSql', () => {
     expect(cls).toContain(`WHEN 'gravel' THEN 'gravel'`);
     expect(cls).toContain(`'quiet_street'`);
     expect(inferred).toBe(`(s IS NULL AND (c IN (${cls.match(/c IN \(([^)]*)\)/)![1]}) OR w))`);
+  });
+});
+
+describe('parseSmoothness', () => {
+  it('accepts documented levels and rejects anything else', () => {
+    expect(parseSmoothness('excellent')).toBe('excellent');
+    expect(parseSmoothness(' Very_Bad ')).toBe('very_bad');
+    expect(parseSmoothness('smooth')).toBeNull();
+    expect(parseSmoothness(null)).toBeNull();
   });
 });

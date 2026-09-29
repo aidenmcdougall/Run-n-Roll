@@ -44,7 +44,7 @@ npm run osm:build            # merge OSM into the network + add surfaces (~8 min
 npm run dev                  # API on :3001, web app on http://localhost:5173
 ```
 
-Open <http://localhost:5173>. Click the map once to set the start (A) and again to set the destination (B), and drag either marker to re-route. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
+Open <http://localhost:5173>. Click the map once to set the start (A) and again to set the destination (B), and drag either marker to re-route. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Each route shows a **skate score** and a **run score**; tap one to see what's behind it. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
 
 To refresh everything later: `npm run data:refresh`, then restart the API.
 
@@ -226,6 +226,35 @@ On 400 random inner-Melbourne trips:
 
 Snapping made a big difference: with penalties alone, "No gravel" left 10.1 km of loose ground. Most of the remainder is trips that start or end deep inside parks with only unsealed paths.
 
+### Skate and run scores ([`routing/scoring.ts`](backend/src/routing/scoring.ts))
+
+Every planned route is rated 0–100 for **skating** and for **running**. Scores describe a route; they don't change which route is chosen. That's the job of preferences (and, later, activity profiles).
+
+The planner reports the route as uniform *stretches* (consecutive edges with the same kind, surface, smoothness and hazards). Each stretch gets a suitability in [0, 1] per activity:
+
+```
+suitability = surfaceFactor × kindFactor × Π hazardFactor      (skating: OSM smoothness replaces surface when tagged)
+score       = 100 × length-weighted mean suitability − walk penalty
+```
+
+The two models deliberately disagree:
+
+| | Skating | Running |
+| --- | --- | --- |
+| Surface | smooth 1.0, paved 0.85, pavers 0.35, compacted 0.1, gravel/dirt **0** | compacted **1.0** (ideal), sealed 0.9, gravel 0.8, trails 0.85 |
+| Path type | shared/separated paths 1.0, protected lanes 0.95, footpaths 0.8, busy roads 0.25, steps **0** | paths and trails 1.0, footpaths 0.9, on-road bike lanes 0.6–0.7, busy roads 0.45 |
+| Hazards | **tram tracks 0.4** (they catch small wheels), merging traffic 0.7 | merging traffic 0.85 |
+| Walking | see below | none |
+
+**Skating is scored as a weakest-link experience.** A stretch that can't be skated (suitability below 0.15, e.g. steps or a gravel link) means stopping and walking, which spoils a route far beyond its share of the length. An average alone would let 230 m of gravel on a 6.7 km route cost just 3 points. So walking costs **−10 per stretch plus −5 per 100 m walked** (up to −60), and it caps the rating: any walking rules out *great*, and walking 100 m or more rules out anything better than *fair*. The UI then suggests switching to the Smooth surface preference. On Southbank → St Kilda, the default route has 230 m of gravel and scores 65 (fair). With Smooth, the router finds a gravel-free route that's slightly shorter and scores 91 (great).
+
+Each score comes with:
+- a **rating**: great ≥ 85, good ≥ 70, fair ≥ 50, poor below that;
+- a **confidence**, from how much of the route's surface is tagged rather than assumed or unknown;
+- **notes that account for the score**. Each stretch's shortfall is split across the factors that caused it, in proportion to their −ln (suitability is a product, so logs add), so the notes' point costs add up to what the route lost. For example: "290 m of pavers, bricks or boardwalk (−12)".
+
+All tables are data, returned by `GET /api/routes/profiles` under `scoring`, and tunable in one place. They're a first calibration: skate scores span 13–96 across random Melbourne trips (median 79); run scores sit higher and tighter (71–90), since most urban routes are perfectly runnable.
+
 ### Search ([`routing/astar.ts`](backend/src/routing/astar.ts), [`routing/planner.ts`](backend/src/routing/planner.ts))
 
 - **A\*** with a binary heap. The heuristic is great-circle distance × the profile's cheapest cost per metre, which keeps it admissible, so routes are optimal for the profile. A unit test checks it matches Dijkstra.
@@ -262,6 +291,7 @@ This responds with a GeoJSON `Feature<LineString>`. Its `properties` hold:
 - `inferredSurfaceM`
 - `preferences`, echoed back
 - `avoidedSurfaceM`: metres still on avoided surfaces
+- `scores.skate` and `scores.run`: `{ score, rating, confidence, notes[] }`
 - `snap` distances
 
 Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
@@ -277,7 +307,7 @@ Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | API (tsx watch) and web app (Vite) together |
-| `npm test` | Backend unit + HTTP tests (vitest, 130 tests) |
+| `npm test` | Backend unit + HTTP tests (vitest, 148 tests) |
 | `npm run typecheck` | Strict `tsc` for both packages |
 | `npm run build` | Compile the API to `backend/dist`, bundle the web app to `frontend/dist` |
 | `npm run db:up` / `db:down` | Start or stop the PostGIS container (data persists in a Docker volume) |
@@ -297,7 +327,7 @@ Configuration comes from the single repo-root `.env`, shared by Docker Compose, 
 
 ## Roadmap
 
-1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data, built on the preference layer. Skating would also weight OSM `smoothness`. **Couples mode** would combine two people's profiles and preferences (e.g. the worse multiplier of the two per edge).
+1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data, built on the preference layer. A skate profile would *route* by the same factors the skate score *rates* with. **Couples mode** would combine two people's profiles and preferences (e.g. the worse multiplier of the two per edge).
 2. **Distance-targeted routes and loops:** "10 km loop from here", and 5/10/15/20 km suggestions.
 3. **Elevation:** slope costs from a DEM (e.g. Vicmap Elevation) and steep-hill avoidance.
 4. **More surface data:** Vicmap sealed/unsealed for rural roads, and City of Melbourne surface condition for the CBD.
