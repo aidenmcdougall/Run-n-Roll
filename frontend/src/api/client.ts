@@ -1,5 +1,5 @@
 import { apiUrl } from '../config';
-import type { ApiErrorBody, LngLatPoint, NetworkInfo, ProfilesResponse, RouteFeature } from './types';
+import type { ApiErrorBody, LngLatPoint, NetworkInfo, ProfilesResponse, RouteFeature, RoutePreferences } from './types';
 
 /** An error returned by the API, carrying its machine-readable code. */
 export class ApiError extends Error {
@@ -34,7 +34,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   getNetwork: (): Promise<NetworkInfo> => request('/api/network'),
   getProfiles: (): Promise<ProfilesResponse> => request('/api/routes/profiles'),
-  planRoute: (start: LngLatPoint, end: LngLatPoint, profile: string, signal?: AbortSignal): Promise<RouteFeature> =>
-    request('/api/routes', { method: 'POST', body: JSON.stringify({ start, end, profile }), signal }),
+  planRoute: (
+    start: LngLatPoint,
+    end: LngLatPoint,
+    profile: string,
+    preferences: RoutePreferences,
+    signal?: AbortSignal,
+  ): Promise<RouteFeature> =>
+    request('/api/routes', { method: 'POST', body: JSON.stringify({ start, end, profile, preferences }), signal }),
   pathTilesUrl: (): string => apiUrl('/api/tiles/paths/{z}/{x}/{y}.pbf'),
 };

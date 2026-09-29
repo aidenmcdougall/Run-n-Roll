@@ -3,10 +3,11 @@ import { api } from './api/client';
 import type { LngLatPoint, NetworkInfo, RoutingProfile } from './api/types';
 import { useRoute } from './api/useRoute';
 import { Legend } from './components/Legend';
+import { Preferences } from './components/Preferences';
 import { RouteSummary } from './components/RouteSummary';
 import { MapView, type HoveredPath, type Waypoint } from './map/MapView';
 import { EDGE_KIND_STYLE, SURFACE_STYLE, type ColorMode } from './map/pathStyle';
-import type { EdgeKind, SurfaceClass } from './api/types';
+import type { EdgeKind, RoutePreferences, SurfaceClass } from './api/types';
 
 const kindLabel = (kind: string): string => EDGE_KIND_STYLE[kind as EdgeKind]?.label ?? kind;
 const surfaceLabel = (surface: string): string => SURFACE_STYLE[surface as SurfaceClass]?.label ?? surface;
@@ -16,6 +17,26 @@ function describeSurface(path: HoveredPath): string {
   if (path.surface) return `${path.surface.replaceAll('_', ' ')}${path.smoothness ? ` · ${path.smoothness} smoothness` : ''}`;
   if (path.surfaceInferred) return 'not tagged (assumed sealed)';
   return 'unknown';
+}
+
+const DEFAULT_PREFERENCES: RoutePreferences = { surface: 'any', avoidSteps: false, avoidBusyRoads: false };
+const PREFERENCES_STORAGE_KEY = 'runnroll.preferences';
+
+/** Restores saved preferences; storage may be unavailable (private mode) or hold stale data. */
+function loadPreferences(): RoutePreferences {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? 'null') as Partial<RoutePreferences> | null;
+    if (!saved) return DEFAULT_PREFERENCES;
+    return {
+      surface: ['any', 'avoid_loose', 'smooth_only'].includes(saved.surface as string)
+        ? (saved.surface as RoutePreferences['surface'])
+        : DEFAULT_PREFERENCES.surface,
+      avoidSteps: saved.avoidSteps === true,
+      avoidBusyRoads: saved.avoidBusyRoads === true,
+    };
+  } catch {
+    return DEFAULT_PREFERENCES;
+  }
 }
 
 function formatPoint(point: LngLatPoint | null): string {
@@ -32,8 +53,17 @@ export default function App() {
   const [hovered, setHovered] = useState<HoveredPath | null>(null);
   const [locating, setLocating] = useState(false);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
+  const [preferences, setPreferences] = useState<RoutePreferences>(loadPreferences);
 
-  const routeState = useRoute(start, end, profileId);
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    } catch {
+      // Storage unavailable: preferences just won't persist.
+    }
+  }, [preferences]);
+
+  const routeState = useRoute(start, end, profileId, preferences);
 
   useEffect(() => {
     api
@@ -87,7 +117,6 @@ export default function App() {
     );
   };
 
-  const selectedProfile = profiles.find((p) => p.id === profileId);
 
   return (
     <div className="app">
@@ -159,19 +188,13 @@ export default function App() {
           </div>
         </section>
 
-        <section>
-          <label className="field">
-            <span>Routing preference</span>
-            <select value={profileId ?? ''} onChange={(e) => setProfileId(e.target.value)} disabled={!profiles.length}>
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedProfile && <p className="hint">{selectedProfile.description}</p>}
-        </section>
+        <Preferences
+          profiles={profiles}
+          profileId={profileId}
+          onProfileChange={setProfileId}
+          preferences={preferences}
+          onChange={setPreferences}
+        />
 
         <section aria-live="polite">
           {routeState.status === 'loading' && <p className="hint">Finding a route…</p>}

@@ -44,6 +44,8 @@ interface ResponseJson {
     legs: unknown[];
     distanceBySurface: Record<string, number>;
     inferredSurfaceM: number;
+    preferences: Record<string, unknown>;
+    avoidedSurfaceM: number;
   };
   error?: { code: string };
 }
@@ -79,6 +81,41 @@ describe('POST /api/routes', () => {
   ])('rejects %s with 400', async (_label, body) => {
     state = ready();
     const { status, json } = await post(body);
+    expect(status).toBe(400);
+    expect(json.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('applies default preferences when none are given', async () => {
+    state = ready();
+    const { json } = await post({ start: toPoint(at(100, 0)), end: toPoint(at(900, 0)) });
+    expect(json.properties?.preferences).toEqual({ surface: 'any', avoidSteps: false, avoidBusyRoads: false });
+    expect(json.properties?.avoidedSurfaceM).toBe(0);
+  });
+
+  it('accepts preferences and reports distance on avoided surfaces', async () => {
+    state = {
+      status: 'ready',
+      graph: buildGraph([segment([[0, 0], [1000, 0]], 'trail', { surfaceClass: 'gravel' })]),
+      builtAt: new Date(),
+      buildMs: 0,
+    };
+    const { status, json } = await post({
+      start: toPoint(at(100, 0)),
+      end: toPoint(at(900, 0)),
+      preferences: { surface: 'avoid_loose', avoidSteps: true },
+    });
+    expect(status).toBe(200);
+    expect(json.properties?.preferences).toEqual({ surface: 'avoid_loose', avoidSteps: true, avoidBusyRoads: false });
+    expect(json.properties?.avoidedSurfaceM).toBeCloseTo(800, 0); // no alternative, so reported
+  });
+
+  it.each([
+    ['unknown surface option', { surface: 'lava' }],
+    ['misspelt preference', { avoidStairs: true }],
+    ['non-boolean flag', { avoidSteps: 'yes' }],
+  ])('rejects %s with 400', async (_label, preferences) => {
+    state = ready();
+    const { status, json } = await post({ start: toPoint(at(0, 0)), end: toPoint(at(900, 0)), preferences });
     expect(status).toBe(400);
     expect(json.error?.code).toBe('VALIDATION_ERROR');
   });

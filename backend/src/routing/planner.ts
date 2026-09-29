@@ -54,7 +54,18 @@ export type PlanResult =
 
 export interface PlanOptions {
   maxSnapDistanceM?: number;
+  /**
+   * Surfaces the user wants to avoid. A route must travel along the edge its
+   * start snaps to until it reaches a junction, so a click beside a long
+   * gravel track would force the route to cover that gravel. When the nearest
+   * edge has an avoided surface, the point may instead snap to an acceptable
+   * edge further away (see `snapPreferring`).
+   */
+  avoidSurfacesAtEnds?: readonly SurfaceClass[];
 }
+
+/** Minimum extra distance (m) we'll snap to reach an edge with an acceptable surface. */
+export const PREFERRED_SNAP_EXTRA_M = 75;
 
 /**
  * Snaps a point to the closest location on the network, optionally only
@@ -65,12 +76,13 @@ export function snapToNetwork(
   point: LngLat,
   maxDistanceM: number,
   component?: number,
+  accept?: (edgeId: number) => boolean,
 ): SnappedPoint | null {
-  const hit = graph.edgeIndex.nearest(
-    point,
-    maxDistanceM,
-    component === undefined ? undefined : (edgeId) => graph.componentOf[graph.edgeFrom[edgeId]!] === component,
-  );
+  const inComponent =
+    component === undefined ? undefined : (edgeId: number) => graph.componentOf[graph.edgeFrom[edgeId]!] === component;
+  const filter =
+    inComponent && accept ? (edgeId: number) => inComponent(edgeId) && accept(edgeId) : (inComponent ?? accept);
+  const hit = graph.edgeIndex.nearest(point, maxDistanceM, filter);
   if (!hit) return null;
   const cumulative = cumulativeLengths(edgeCoordinates(graph, hit.owner));
   const pieceStart = cumulative[hit.piece]!;
@@ -132,39 +144,80 @@ const REF_FROM_TO_END = -3; // end edge's `from` node → T
 const REF_TO_TO_END = -4; // end edge's `to` node → T
 const REF_START_TO_END = -5; // S → T along a single shared edge
 
-/** Per-profile edge costs, computed once per graph and reused across requests. */
+/**
+ * Per-profile edge costs, computed once per graph and reused across
+ * requests. Each array is ~12 MB on the full network and preferences
+ * multiply the number of possible profiles, so only the most recently used
+ * few are kept (least-recently-used eviction).
+ */
+export const MAX_CACHED_PROFILES = 6;
 const costCache = new WeakMap<RoutingGraph, Map<string, Float64Array>>();
 
 function edgeCosts(graph: RoutingGraph, profile: RoutingProfile): Float64Array {
   let byProfile = costCache.get(graph);
   if (!byProfile) costCache.set(graph, (byProfile = new Map()));
-  let costs = byProfile.get(profile.id);
-  if (!costs) {
-    costs = new Float64Array(graph.edgeCount);
-    // One reusable view object keeps this allocation-free over 1M+ edges
-    // while still going through the single `edgeCost` definition.
-    const view: { -readonly [K in keyof CostableEdge]: CostableEdge[K] } = {
-      lengthM: 0,
-      kind: 'unknown',
-      hazards: [],
-      surfaceClass: 'unknown',
-    };
-    for (let e = 0; e < graph.edgeCount; e++) {
-      view.lengthM = graph.edgeLength[e]!;
-      view.kind = EDGE_KINDS[graph.edgeKind[e]!]!;
-      view.hazards = graph.hazardSets[graph.edgeHazards[e]!]!;
-      view.surfaceClass = SURFACE_CLASSES[graph.edgeSurface[e]!]!;
-      costs[e] = edgeCost(view, profile);
-    }
-    byProfile.set(profile.id, costs);
+  const cached = byProfile.get(profile.id);
+  if (cached) {
+    // Re-insert to mark as most recently used (Maps iterate in insertion order).
+    byProfile.delete(profile.id);
+    byProfile.set(profile.id, cached);
+    return cached;
   }
+
+  const costs = new Float64Array(graph.edgeCount);
+  // One reusable view object keeps this allocation-free over 1M+ edges
+  // while still going through the single `edgeCost` definition.
+  const view: { -readonly [K in keyof CostableEdge]: CostableEdge[K] } = {
+    lengthM: 0,
+    kind: 'unknown',
+    hazards: [],
+    surfaceClass: 'unknown',
+  };
+  for (let e = 0; e < graph.edgeCount; e++) {
+    view.lengthM = graph.edgeLength[e]!;
+    view.kind = EDGE_KINDS[graph.edgeKind[e]!]!;
+    view.hazards = graph.hazardSets[graph.edgeHazards[e]!]!;
+    view.surfaceClass = SURFACE_CLASSES[graph.edgeSurface[e]!]!;
+    costs[e] = edgeCost(view, profile);
+  }
+  byProfile.set(profile.id, costs);
+  if (byProfile.size > MAX_CACHED_PROFILES) byProfile.delete(byProfile.keys().next().value!);
   return costs;
+}
+
+/** Number of profiles with cached costs for a graph (for tests and diagnostics). */
+export function cachedProfileCount(graph: RoutingGraph): number {
+  return costCache.get(graph)?.size ?? 0;
 }
 
 function canTraverse(graph: RoutingGraph, edge: number, forward: boolean, profile: RoutingProfile): boolean {
   if (!profile.respectOneWay) return true;
   const direction = edgeDirection(graph, edge);
   return direction === 'both' || forward === (direction === 'forward');
+}
+
+/**
+ * Snaps like `snapToNetwork`, but steps off an avoided surface onto an
+ * acceptable edge when that is the better trade (see
+ * `PlanOptions.avoidSurfacesAtEnds`).
+ *
+ * The trade: snapping to the avoided edge forces the route to travel along
+ * it to its nearest end (`exitM`). We'll snap up to that much further away
+ * instead — never less than PREFERRED_SNAP_EXTRA_M, never beyond the normal
+ * snapping range — so "start 90 m away on a sealed path" beats "cover 900 m
+ * of dirt first".
+ */
+function snapPreferring(
+  graph: RoutingGraph,
+  point: LngLat,
+  maxDistanceM: number,
+  avoid: ReadonlySet<number>,
+): SnappedPoint | null {
+  const nearest = snapToNetwork(graph, point, maxDistanceM);
+  if (!nearest || avoid.size === 0 || !avoid.has(graph.edgeSurface[nearest.edgeId]!)) return nearest;
+  const exitM = Math.min(nearest.alongM, graph.edgeLength[nearest.edgeId]! - nearest.alongM);
+  const reach = Math.min(maxDistanceM, nearest.distanceM + Math.max(PREFERRED_SNAP_EXTRA_M, exitM));
+  return snapToNetwork(graph, point, reach, undefined, (edge) => !avoid.has(graph.edgeSurface[edge]!)) ?? nearest;
 }
 
 /**
@@ -184,11 +237,12 @@ export function planRoute(
   options: PlanOptions = {},
 ): PlanResult {
   const maxSnap = options.maxSnapDistanceM ?? DEFAULT_MAX_SNAP_DISTANCE_M;
-  const nearestStart = snapToNetwork(graph, from, maxSnap);
+  const avoid = new Set((options.avoidSurfacesAtEnds ?? []).map((surface) => SURFACE_CLASSES.indexOf(surface)));
+  const nearestStart = snapPreferring(graph, from, maxSnap, avoid);
   if (!nearestStart) {
     return { ok: false, code: 'START_NOT_NEAR_NETWORK', message: `No path within ${maxSnap} m of the start point.` };
   }
-  const nearestEnd = snapToNetwork(graph, to, maxSnap);
+  const nearestEnd = snapPreferring(graph, to, maxSnap, avoid);
   if (!nearestEnd) {
     return { ok: false, code: 'END_NOT_NEAR_NETWORK', message: `No path within ${maxSnap} m of the destination.` };
   }
