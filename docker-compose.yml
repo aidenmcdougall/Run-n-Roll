@@ -17,5 +17,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-off tool: loads the OpenStreetMap extract into PostGIS.
+  # Not started by `docker compose up`; run via `npm run osm:load`.
+  osm2pgsql:
+    profiles: ["tools"]
+    build: ./docker/osm2pgsql
+    image: runnroll-osm2pgsql
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-runnroll}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-runnroll}
+      PGDATABASE: ${POSTGRES_DB:-runnroll}
+    volumes:
+      - ./data/raw/osm:/data:ro
+      - ./backend/db/osm:/style:ro
+
 volumes:
   pgdata:

@@ -5,6 +5,18 @@ import { useRoute } from './api/useRoute';
 import { Legend } from './components/Legend';
 import { RouteSummary } from './components/RouteSummary';
 import { MapView, type HoveredPath, type Waypoint } from './map/MapView';
+import { EDGE_KIND_STYLE, SURFACE_STYLE, type ColorMode } from './map/pathStyle';
+import type { EdgeKind, SurfaceClass } from './api/types';
+
+const kindLabel = (kind: string): string => EDGE_KIND_STYLE[kind as EdgeKind]?.label ?? kind;
+const surfaceLabel = (surface: string): string => SURFACE_STYLE[surface as SurfaceClass]?.label ?? surface;
+
+/** One-line description of a hovered path's ground, e.g. "asphalt · smooth (good)". */
+function describeSurface(path: HoveredPath): string {
+  if (path.surface) return `${path.surface.replaceAll('_', ' ')}${path.smoothness ? ` · ${path.smoothness} smoothness` : ''}`;
+  if (path.surfaceInferred) return 'not tagged (assumed sealed)';
+  return 'unknown';
+}
 
 function formatPoint(point: LngLatPoint | null): string {
   return point ? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}` : '—';
@@ -19,6 +31,7 @@ export default function App() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<HoveredPath | null>(null);
   const [locating, setLocating] = useState(false);
+  const [colorMode, setColorMode] = useState<ColorMode>('type');
 
   const routeState = useRoute(start, end, profileId);
 
@@ -79,6 +92,7 @@ export default function App() {
   return (
     <div className="app">
       <MapView
+        colorMode={colorMode}
         start={start}
         end={end}
         route={routeState.status === 'success' ? routeState.route : null}
@@ -179,17 +193,39 @@ export default function App() {
         </section>
 
         <section>
-          <h2>Path network</h2>
-          <Legend />
+          <div className="section-header">
+            <h2>Path network</h2>
+            <div className="segmented" role="group" aria-label="Colour paths by">
+              {(['type', 'surface'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={colorMode === mode ? 'active' : ''}
+                  aria-pressed={colorMode === mode}
+                  onClick={() => setColorMode(mode)}
+                >
+                  {mode === 'type' ? 'Path type' : 'Surface'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Legend mode={colorMode} />
           <div className="hover-info">
             {hovered ? (
               <>
                 <strong>{hovered.name ?? 'Unnamed path'}</strong>
                 <div>
-                  {hovered.infraType}
-                  {hovered.highwayType ? ` · ${hovered.highwayType}` : ''}
+                  {kindLabel(hovered.infraCategory)}
+                  {hovered.highwayType ? ` · ${hovered.highwayType.replaceAll('_', ' ')}` : ''}
                   {hovered.widthM ? ` · ${hovered.widthM} m wide` : ''}
-                  {hovered.hazards ? ` · ⚠ ${hovered.hazards.replaceAll('_', ' ')}` : ''}
+                </div>
+                <div>
+                  Surface: {describeSurface(hovered)}
+                  {hovered.surfaceClass && hovered.surface ? ` (${surfaceLabel(hovered.surfaceClass).toLowerCase()})` : ''}
+                </div>
+                {hovered.hazards && <div>⚠ {hovered.hazards.replaceAll('_', ' ').replaceAll(',', ', ')}</div>}
+                <div className="hint small">
+                  Source: {hovered.source === 'osm' ? 'OpenStreetMap' : 'DTP Bicycle Infrastructure Network'}
                 </div>
               </>
             ) : (

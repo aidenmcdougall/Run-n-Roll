@@ -13,20 +13,34 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { LngLatPoint, RouteFeature } from '../api/types';
 import { config } from '../config';
-import { pathColorExpression } from './pathStyle';
+import {
+  pathColorExpression,
+  pathOpacityExpression,
+  pathSortKeyExpression,
+  pathWidthExpression,
+  type ColorMode,
+} from './pathStyle';
 import './setupMapLibre';
 
 export interface HoveredPath {
   name: string | null;
-  infraType: string;
+  source: 'vic_dtp_bin' | 'osm' | null;
+  infraCategory: string;
   highwayType: string | null;
   widthM: number | null;
   hazards: string;
+  surface: string | null;
+  surfaceClass: string | null;
+  surfaceInferred: boolean;
+  smoothness: string | null;
 }
+
+const stringProp = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
 
 export type Waypoint = 'start' | 'end';
 
 interface MapViewProps {
+  colorMode: ColorMode;
   start: LngLatPoint | null;
   end: LngLatPoint | null;
   route: RouteFeature | null;
@@ -47,11 +61,13 @@ function createMarker(className: string, label: string): Marker {
   return new Marker({ element: el, draggable: true });
 }
 
-export function MapView({ start, end, route, onMapClick, onWaypointMoved, onHoverPath }: MapViewProps) {
+export function MapView({ colorMode, start, end, route, onMapClick, onWaypointMoved, onHoverPath }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Record<Waypoint, Marker | null>>({ start: null, end: null });
   const [loaded, setLoaded] = useState(false);
+  // The style is created once; later mode changes are applied by an effect.
+  const initialColorMode = useRef(colorMode);
 
   // Keep the latest callbacks in a ref so map listeners bound once still call them.
   const callbacks = useRef({ onMapClick, onWaypointMoved, onHoverPath });
@@ -81,18 +97,18 @@ export function MapView({ start, end, route, onMapClick, onWaypointMoved, onHove
         minzoom: 8,
         maxzoom: 16, // overzoomed beyond this; geometry is already full-precision
         attribution:
-          'Paths: <a href="https://discover.data.vic.gov.au/dataset/bicycle-infrastructure-network">DTP Bicycle Infrastructure Network</a> (© OpenStreetMap contributors, ODbL)',
+          'Paths: <a href="https://discover.data.vic.gov.au/dataset/bicycle-infrastructure-network">DTP Bicycle Infrastructure Network</a> and <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> (ODbL)',
       });
       map.addLayer({
         id: PATHS_LAYER,
         type: 'line',
         source: PATHS_SOURCE,
         'source-layer': 'paths',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': pathSortKeyExpression },
         paint: {
-          'line-color': pathColorExpression,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 12, 1.6, 16, 4],
-          'line-opacity': 0.85,
+          'line-color': pathColorExpression(initialColorMode.current),
+          'line-width': pathWidthExpression,
+          'line-opacity': pathOpacityExpression(initialColorMode.current),
         },
       });
 
@@ -124,12 +140,18 @@ export function MapView({ start, end, route, onMapClick, onWaypointMoved, onHove
       map.getCanvas().style.cursor = 'crosshair';
       const props = event.features?.[0]?.properties;
       if (!props) return;
+      const source = stringProp(props.source);
       callbacks.current.onHoverPath({
-        name: typeof props.name === 'string' ? props.name : null,
-        infraType: String(props.infra_type ?? ''),
-        highwayType: typeof props.highway_type === 'string' ? props.highway_type : null,
+        name: stringProp(props.name),
+        source: source === 'vic_dtp_bin' || source === 'osm' ? source : null,
+        infraCategory: String(props.infra_category ?? 'unknown'),
+        highwayType: stringProp(props.highway_type),
         widthM: typeof props.width_m === 'number' ? props.width_m : null,
         hazards: String(props.hazards ?? ''),
+        surface: stringProp(props.surface),
+        surfaceClass: stringProp(props.surface_class),
+        surfaceInferred: props.surface_inferred === true,
+        smoothness: stringProp(props.smoothness),
       });
     });
     map.on('mouseleave', PATHS_LAYER, () => {
@@ -170,6 +192,14 @@ export function MapView({ start, end, route, onMapClick, onWaypointMoved, onHove
     sync('start', start, 'waypoint-start', 'A');
     sync('end', end, 'waypoint-end', 'B');
   }, [start, end]);
+
+  // --- restyle paths when the colour mode changes ---------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    map.setPaintProperty(PATHS_LAYER, 'line-color', pathColorExpression(colorMode));
+    map.setPaintProperty(PATHS_LAYER, 'line-opacity', pathOpacityExpression(colorMode));
+  }, [colorMode, loaded]);
 
   // --- sync route line ---------------------------------------------------------
   useEffect(() => {

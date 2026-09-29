@@ -1,4 +1,5 @@
-import type { InfraCategory } from '../domain/infrastructure.js';
+import { INFRA_CATEGORIES, type InfraCategory } from '../domain/infrastructure.js';
+import type { SurfaceClass } from '../domain/surface.js';
 
 /**
  * Edge kinds the router can traverse: every infrastructure category from the
@@ -6,6 +7,9 @@ import type { InfraCategory } from '../domain/infrastructure.js';
  * small gaps between segments that don't share a vertex (see graph.ts).
  */
 export type EdgeKind = InfraCategory | 'connector';
+
+/** Every edge kind, in a stable order (the graph stores kinds as indices into this). */
+export const EDGE_KINDS: readonly EdgeKind[] = [...INFRA_CATEGORIES, 'connector'];
 
 /**
  * A routing profile turns an edge's physical length into a traversal cost:
@@ -25,11 +29,8 @@ export interface RoutingProfile {
   readonly kindMultipliers: Readonly<Record<EdgeKind, number>>;
   /** Applied once per hazard on an edge; hazards not listed cost nothing extra. */
   readonly hazardMultipliers: Readonly<Record<string, number>>;
-  /**
-   * Keyed by OSM `surface` value. The current dataset has no surface data, so
-   * every edge falls back to `unknown`; this is ready for OSM enrichment.
-   */
-  readonly surfaceMultipliers: Readonly<Record<string, number>> & { readonly unknown: number };
+  /** Keyed by normalised surface class (see domain/surface.ts). */
+  readonly surfaceMultipliers: Readonly<Record<SurfaceClass, number>>;
   /** Whether to honour one-way bike lanes (relevant for cycling, not running). */
   readonly respectOneWay: boolean;
 }
@@ -39,7 +40,7 @@ export interface CostableEdge {
   readonly lengthM: number;
   readonly kind: EdgeKind;
   readonly hazards: readonly string[];
-  readonly surface: string | null;
+  readonly surfaceClass: SurfaceClass;
 }
 
 export function edgeCost(edge: CostableEdge, profile: RoutingProfile): number {
@@ -47,7 +48,7 @@ export function edgeCost(edge: CostableEdge, profile: RoutingProfile): number {
   for (const hazard of edge.hazards) {
     multiplier *= profile.hazardMultipliers[hazard] ?? 1;
   }
-  multiplier *= (edge.surface && profile.surfaceMultipliers[edge.surface]) || profile.surfaceMultipliers.unknown;
+  multiplier *= profile.surfaceMultipliers[edge.surfaceClass];
   return edge.lengthM * multiplier;
 }
 
@@ -78,7 +79,15 @@ export function validateProfile(profile: RoutingProfile): void {
   }
 }
 
-const NEUTRAL_SURFACES = { unknown: 1 } as const;
+const NEUTRAL_SURFACES: Record<SurfaceClass, number> = {
+  smooth: 1,
+  paved: 1,
+  rough_paved: 1,
+  compacted: 1,
+  gravel: 1,
+  unpaved: 1,
+  unknown: 1,
+};
 
 /**
  * Pure distance: every metre costs the same. Useful as a baseline and for
@@ -97,6 +106,13 @@ export const SHORTEST_PROFILE: RoutingProfile = {
     shared_parking_lane: 1,
     shared_street: 1,
     informal: 1,
+    footpath: 1,
+    trail: 1,
+    track: 1,
+    steps: 1,
+    quiet_street: 1,
+    road: 1,
+    busy_road: 1,
     unknown: 1,
     connector: 1,
   },
@@ -106,9 +122,10 @@ export const SHORTEST_PROFILE: RoutingProfile = {
 };
 
 /**
- * Default MVP profile: prefers off-road paths, then physically protected
- * lanes, then painted lanes, and treats gaps in the network (connectors,
- * typically unmarked road crossings) as expensive.
+ * Default profile: prefers smooth off-road paths, then protected lanes, then
+ * painted lanes and footpaths, then quiet streets, and treats busy roads,
+ * steps and unbridged gaps (connectors, typically unmarked road crossings)
+ * as expensive. Rough or loose ground costs extra on any kind of edge.
  */
 export const PREFER_PATHS_PROFILE: RoutingProfile = {
   id: 'prefer_paths',
@@ -123,6 +140,14 @@ export const PREFER_PATHS_PROFILE: RoutingProfile = {
     shared_parking_lane: 2,
     shared_street: 2,
     informal: 2.5,
+    // OpenStreetMap
+    trail: 1.3, // off-road, but often narrow; surface multipliers do the rest
+    footpath: 1.5, // shared with pedestrians, frequent driveways and kerbs
+    quiet_street: 1.6,
+    track: 1.8,
+    road: 2.5,
+    busy_road: 4,
+    steps: 6,
     unknown: 2,
     connector: 3,
   },
@@ -132,18 +157,13 @@ export const PREFER_PATHS_PROFILE: RoutingProfile = {
     tram_line: 1.5,
   },
   surfaceMultipliers: {
-    // Ready for OSM surface enrichment; unused until then.
-    asphalt: 1,
-    concrete: 1,
-    paved: 1,
-    paving_stones: 1.2,
+    smooth: 1,
+    paved: 1.05,
+    rough_paved: 1.2,
     compacted: 1.3,
-    fine_gravel: 1.4,
-    gravel: 1.8,
-    unpaved: 1.8,
-    dirt: 2,
-    grass: 2.5,
-    unknown: 1,
+    gravel: 1.7,
+    unpaved: 2,
+    unknown: 1.1, // slight penalty: could be anything
   },
   respectOneWay: false,
 };

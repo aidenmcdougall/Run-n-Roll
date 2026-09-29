@@ -38,7 +38,13 @@ const toPoint = ([lng, lat]: readonly [number, number]) => ({ lng, lat });
 interface ResponseJson {
   type?: string;
   geometry?: { type: string };
-  properties?: { profile: string; distanceM: number; legs: unknown[] };
+  properties?: {
+    profile: string;
+    distanceM: number;
+    legs: unknown[];
+    distanceBySurface: Record<string, number>;
+    inferredSurfaceM: number;
+  };
   error?: { code: string };
 }
 
@@ -61,6 +67,8 @@ describe('POST /api/routes', () => {
     expect(json.properties?.profile).toBe('prefer_paths');
     expect(json.properties?.distanceM).toBeCloseTo(800, 0);
     expect(json.properties?.legs).toEqual([{ kind: 'shared_use_path', name: 'Test Trail', lengthM: expect.any(Number) }]);
+    expect(json.properties?.distanceBySurface).toEqual({ smooth: expect.any(Number) });
+    expect(json.properties?.inferredSurfaceM).toBe(0);
   });
 
   it.each([

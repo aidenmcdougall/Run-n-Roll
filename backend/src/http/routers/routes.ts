@@ -26,6 +26,11 @@ const PLAN_ERROR_STATUS: Record<PlanErrorCode, number> = {
 
 const round = (value: number, places = 1): number => Math.round(value * 10 ** places) / 10 ** places;
 
+const roundValues = <K extends string>(record: Partial<Record<K, number>>): Partial<Record<K, number>> =>
+  Object.fromEntries(Object.entries<number | undefined>(record).map(([key, metres]) => [key, round(metres ?? 0)])) as Partial<
+    Record<K, number>
+  >;
+
 export function routesRouter(network: NetworkStateProvider): Router {
   const router = Router();
 
@@ -63,9 +68,9 @@ export function routesRouter(network: NetworkStateProvider): Router {
         distanceM: round(route.distanceM),
         cost: round(route.cost),
         legs: route.legs.map((leg) => ({ ...leg, lengthM: round(leg.lengthM) })),
-        distanceByKind: Object.fromEntries(
-          Object.entries(route.distanceByKind).map(([kind, metres]) => [kind, round(metres)]),
-        ),
+        distanceByKind: roundValues(route.distanceByKind),
+        distanceBySurface: roundValues(route.distanceBySurface),
+        inferredSurfaceM: round(route.inferredSurfaceM),
         snap: {
           start: { point: route.start.point, distanceM: round(route.start.distanceM) },
           end: { point: route.end.point, distanceM: round(route.end.distanceM) },

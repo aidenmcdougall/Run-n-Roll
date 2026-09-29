@@ -41,6 +41,7 @@ const EnvSchema = z.object({
     .default(
       'https://opendata.transport.vic.gov.au/dataset/6cb739f0-ccf1-47a2-b215-192daf1e501a/resource/93e3301d-c559-44df-9435-01dfcad10794/download/bicycle_infrastructure_network.geojson',
     ),
+  OSM_EXTRACT_URL: z.url().default('https://download.geofabrik.de/australia-oceania/australia/victoria-latest.osm.pbf'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

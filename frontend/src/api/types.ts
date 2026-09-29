@@ -12,9 +12,18 @@ export type InfraCategory =
   | 'shared_parking_lane'
   | 'shared_street'
   | 'informal'
+  | 'footpath'
+  | 'trail'
+  | 'track'
+  | 'steps'
+  | 'quiet_street'
+  | 'road'
+  | 'busy_road'
   | 'unknown';
 
 export type EdgeKind = InfraCategory | 'connector';
+
+export type SurfaceClass = 'smooth' | 'paved' | 'rough_paved' | 'compacted' | 'gravel' | 'unpaved' | 'unknown';
 
 export type LngLatTuple = [lng: number, lat: number];
 
@@ -29,7 +38,7 @@ export interface RoutingProfile {
   description: string;
   kindMultipliers: Record<EdgeKind, number>;
   hazardMultipliers: Record<string, number>;
-  surfaceMultipliers: Record<string, number>;
+  surfaceMultipliers: Record<SurfaceClass, number>;
   respectOneWay: boolean;
 }
 
@@ -53,6 +62,9 @@ export interface RouteFeature {
     cost: number;
     legs: RouteLeg[];
     distanceByKind: Partial<Record<EdgeKind, number>>;
+    distanceBySurface: Partial<Record<SurfaceClass, number>>;
+    /** Metres whose surface was assumed (e.g. untagged streets) rather than tagged. */
+    inferredSurfaceM: number;
     snap: {
       start: { point: LngLatTuple; distanceM: number };
       end: { point: LngLatTuple; distanceM: number };
