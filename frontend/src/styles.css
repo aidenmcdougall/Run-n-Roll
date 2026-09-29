@@ -70,7 +70,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 .small { font-size: 12px; }
 code { font-size: 12px; background: rgba(0, 0, 0, 0.06); padding: 1px 4px; border-radius: 4px; }
 
-.route-distance { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; color: var(--accent); }
+.route-summary { display: flex; flex-direction: column; gap: 8px; }
+.route-summary h2 { margin: 0; }
+/* Distance uses the score-card look, in a neutral tone. */
+.score-card.distance-card { --tone: var(--fg); background: #f9fafb; border-color: var(--border); }
+.distance-card .score-confidence { text-transform: none; }
 .breakdown-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--border); }
 .breakdown-list, .legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .breakdown-list li { display: flex; align-items: center; gap: 8px; }
