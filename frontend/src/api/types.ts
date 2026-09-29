@@ -42,6 +42,15 @@ export interface RoutingProfile {
   respectOneWay: boolean;
 }
 
+export type SurfacePreference = 'any' | 'avoid_loose' | 'smooth_only';
+
+/** Modifiers layered on the base routing profile (see backend routing/preferences.ts). */
+export interface RoutePreferences {
+  surface: SurfacePreference;
+  avoidSteps: boolean;
+  avoidBusyRoads: boolean;
+}
+
 export interface ProfilesResponse {
   defaultProfile: string;
   profiles: RoutingProfile[];
@@ -58,6 +67,9 @@ export interface RouteFeature {
   geometry: { type: 'LineString'; coordinates: LngLatTuple[] };
   properties: {
     profile: string;
+    preferences: RoutePreferences;
+    /** Metres still on surfaces the preferences avoid (there was no alternative). */
+    avoidedSurfaceM: number;
     distanceM: number;
     cost: number;
     legs: RouteLeg[];

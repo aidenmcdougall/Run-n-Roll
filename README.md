@@ -44,7 +44,7 @@ npm run osm:build            # merge OSM into the network + add surfaces (~8 min
 npm run dev                  # API on :3001, web app on http://localhost:5173
 ```
 
-Open <http://localhost:5173>. Click the map once to set the start (A) and again to set the destination (B), and drag either marker to re-route. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
+Open <http://localhost:5173>. Click the map once to set the start (A) and again to set the destination (B), and drag either marker to re-route. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
 
 To refresh everything later: `npm run data:refresh`, then restart the API.
 
@@ -202,6 +202,30 @@ All weights live in `RoutingProfile` data:
 | `prefer_paths` (default) | **Kind:** shared/separated paths ×1.0, protected lanes ×1.2, trails ×1.3, footpaths / buffered lanes ×1.5, quiet streets ×1.6, painted lanes ×1.8, tracks ×1.8, roads ×2.5, busy roads ×4, steps ×6, gap connectors ×3. **Surface:** smooth ×1.0, paved ×1.05, rough paved ×1.2, compacted ×1.3, gravel ×1.7, unpaved ×2, unknown ×1.1. **Hazards:** tram lines ×1.5, merging traffic ×1.3, parking ×1.1. |
 | `shortest` | Every metre costs the same, as a baseline |
 
+### Preferences ([`routing/preferences.ts`](backend/src/routing/preferences.ts))
+
+Preferences are modifiers **layered on the base profile**, so they compose ("prefer paths" + "no gravel" + "avoid steps" is one request). Each combination becomes a derived profile with its own id, so edge costs are cached per combination (at most 6 are kept, least recently used first).
+
+| Preference | Options | Extra cost multipliers |
+| --- | --- | --- |
+| `surface` | `any` · `avoid_loose` ("No gravel") · `smooth_only` ("Smooth") | No gravel: gravel/dirt ×10, compacted ×3, unknown ×1.5. Smooth: also pavers/bricks/boardwalk ×4, compacted ×10, gravel/dirt ×15, unknown ×2. |
+| `avoidSteps` | boolean | steps ×20 |
+| `avoidBusyRoads` | boolean | busy roads ×3, roads ×1.5 |
+
+These are **strong penalties, not bans**. A route is still returned when the only way through crosses an avoided surface; the response's `avoidedSurfaceM` says how much, and the UI warns about it. A ban would just fail with "no route".
+
+**Snapping respects preferences too.** A route has to travel along the edge its start snaps to until it reaches a junction. So a click beside a long gravel track would force that gravel, whatever the penalty. When the nearest edge has an avoided surface, the point may snap to an acceptable edge further away instead: up to as far as it would otherwise have to travel on the avoided edge to get off it (at least 75 m, never beyond the 500 m snapping range).
+
+On 400 random inner-Melbourne trips:
+
+| Surface preference | Total distance | Gravel / dirt / compacted | Incl. pavers & bricks |
+| --- | --- | --- | --- |
+| Any | 3,582 km | 27.4 km | 112.8 km |
+| No gravel | 3,597 km (+0.4%) | **7.1 km (−74%)** | 95.9 km |
+| Smooth | 3,634 km (+1.5%) | 6.7 km (−76%) | **19.7 km (−83%)** |
+
+Snapping made a big difference: with penalties alone, "No gravel" left 10.1 km of loose ground. Most of the remainder is trips that start or end deep inside parks with only unsealed paths.
+
 ### Search ([`routing/astar.ts`](backend/src/routing/astar.ts), [`routing/planner.ts`](backend/src/routing/planner.ts))
 
 - **A\*** with a binary heap. The heuristic is great-circle distance × the profile's cheapest cost per metre, which keeps it admissible, so routes are optimal for the profile. A unit test checks it matches Dijkstra.
@@ -225,14 +249,19 @@ Content-Type: application/json
 
 { "start": { "lng": 144.9646, "lat": -37.8207 },
   "end":   { "lng": 144.9745, "lat": -37.8676 },
-  "profile": "prefer_paths" }
+  "profile": "prefer_paths",
+  "preferences": { "surface": "avoid_loose", "avoidSteps": true, "avoidBusyRoads": false } }
 ```
+
+`profile` and `preferences` (and each preference field) are optional, with the defaults shown by `GET /api/routes/profiles`. Unknown preference fields are rejected with 400.
 
 This responds with a GeoJSON `Feature<LineString>`. Its `properties` hold:
 - `distanceM` and `cost`
 - `legs`: consecutive stretches by kind and name
 - `distanceByKind` and `distanceBySurface`
 - `inferredSurfaceM`
+- `preferences`, echoed back
+- `avoidedSurfaceM`: metres still on avoided surfaces
 - `snap` distances
 
 Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
@@ -248,7 +277,7 @@ Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | API (tsx watch) and web app (Vite) together |
-| `npm test` | Backend unit + HTTP tests (vitest, 108 tests) |
+| `npm test` | Backend unit + HTTP tests (vitest, 130 tests) |
 | `npm run typecheck` | Strict `tsc` for both packages |
 | `npm run build` | Compile the API to `backend/dist`, bundle the web app to `frontend/dist` |
 | `npm run db:up` / `db:down` | Start or stop the PostGIS container (data persists in a Docker volume) |
@@ -268,7 +297,7 @@ Configuration comes from the single repo-root `.env`, shared by Docker Compose, 
 
 ## Roadmap
 
-1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data. Skating would weight `smoothness` and treat steps and unpaved ground as impassable. **Couples mode** would combine two profiles (e.g. the worse multiplier of the two per edge).
+1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data, built on the preference layer. Skating would also weight OSM `smoothness`. **Couples mode** would combine two people's profiles and preferences (e.g. the worse multiplier of the two per edge).
 2. **Distance-targeted routes and loops:** "10 km loop from here", and 5/10/15/20 km suggestions.
 3. **Elevation:** slope costs from a DEM (e.g. Vicmap Elevation) and steep-hill avoidance.
 4. **More surface data:** Vicmap sealed/unsealed for rural roads, and City of Melbourne surface condition for the CBD.

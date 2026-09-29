@@ -40,7 +40,8 @@ function Breakdown({ title, rows, total }: { title: string; rows: Row[]; total: 
 const byLength = (a: Row, b: Row): number => b.metres - a.metres;
 
 export function RouteSummary({ route }: { route: RouteFeature }) {
-  const { distanceM, distanceByKind, distanceBySurface, inferredSurfaceM, snap } = route.properties;
+  const { distanceM, distanceByKind, distanceBySurface, inferredSurfaceM, avoidedSurfaceM, preferences, snap } =
+    route.properties;
 
   const kindRows = (Object.entries(distanceByKind) as [EdgeKind, number][])
     .map(([kind, metres]) => ({ key: kind, label: EDGE_KIND_STYLE[kind].label, color: EDGE_KIND_STYLE[kind].color, metres }))
@@ -58,6 +59,13 @@ export function RouteSummary({ route }: { route: RouteFeature }) {
   return (
     <div className="route-summary">
       <div className="route-distance">{formatDistance(distanceM)}</div>
+      {avoidedSurfaceM >= 10 && (
+        <div className="alert">
+          Includes {formatDistance(avoidedSurfaceM)} of{' '}
+          {preferences.surface === 'smooth_only' ? 'rough or loose ground' : 'gravel or dirt'}: there was no reasonable way
+          around it.
+        </div>
+      )}
       <Breakdown title="Path type" rows={kindRows} total={distanceM} />
       <Breakdown title="Surface" rows={surfaceRows} total={distanceM} />
       {inferredShare >= 0.05 && (
@@ -67,8 +75,9 @@ export function RouteSummary({ route }: { route: RouteFeature }) {
       )}
       {(snap.start.distanceM > 25 || snap.end.distanceM > 25) && (
         <p className="hint">
-          Snapped to the nearest path: start {formatDistance(snap.start.distanceM)} away, end{' '}
-          {formatDistance(snap.end.distanceM)} away.
+          The route joins the path network {formatDistance(snap.start.distanceM)} from your start and{' '}
+          {formatDistance(snap.end.distanceM)} from your destination
+          {preferences.surface !== 'any' ? ', at the nearest path matching your surface preference' : ''}.
         </p>
       )}
     </div>

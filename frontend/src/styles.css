@@ -97,3 +97,8 @@ code { font-size: 12px; background: rgba(0, 0, 0, 0.06); padding: 1px 4px; borde
 .breakdown { display: flex; flex-direction: column; gap: 6px; }
 .breakdown-title { font-size: 12px; color: var(--muted); }
 .hover-info { display: flex; flex-direction: column; gap: 2px; }
+
+.segmented-full { display: flex; }
+.segmented-full button { flex: 1; padding: 6px 8px; font-size: 13px; }
+.checkbox-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+.checkbox-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
