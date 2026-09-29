@@ -15,6 +15,7 @@ import { pool } from '../src/db/pool.js';
 import { waitForDatabase } from '../src/db/waitForDatabase.js';
 import { categoriseInfraType, parseHazards } from '../src/domain/infrastructure.js';
 import { BIN_LOCAL_PATH, BIN_SOURCE } from './dataset.js';
+import { enrichDtpPathsFromOsm } from './osm-enrichment.js';
 
 const BATCH_SIZE = 2000;
 
@@ -156,6 +157,10 @@ async function importDataset(filePath: string): Promise<void> {
       process.stdout.write(`\rInserted ${inserted} paths...`);
     }
     process.stdout.write('\n');
+
+    // Keep OSM surface data on the fresh rows, if OSM has been loaded.
+    const enriched = await enrichDtpPathsFromOsm(client);
+    if (enriched > 0) console.log(`Enriched ${enriched} paths with OSM surface data.`);
 
     await client.query('UPDATE dataset_imports SET path_count = $1 WHERE id = $2', [inserted, importId]);
     await client.query('COMMIT');

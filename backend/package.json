@@ -12,7 +12,10 @@
     "test:watch": "vitest",
     "migrate": "tsx scripts/migrate.ts",
     "data:download": "tsx scripts/download-bin.ts",
-    "data:import": "tsx scripts/import-bin.ts"
+    "data:import": "tsx scripts/import-bin.ts",
+    "osm:download": "tsx scripts/download-osm.ts",
+    "osm:load": "tsx scripts/load-osm.ts",
+    "osm:build": "tsx scripts/build-osm-network.ts"
   },
   "dependencies": {
     "cors": "^2.8.6",

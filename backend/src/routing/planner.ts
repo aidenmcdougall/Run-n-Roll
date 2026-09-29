@@ -1,9 +1,17 @@
+import { SURFACE_CLASSES, type SurfaceClass } from '../domain/surface.js';
 import { aStar, type SearchSpace } from './astar.js';
-import { cumulativeLengths, haversineMeters, slicePolyline, type LngLat } from './geo.js';
-import type { GraphEdge, RoutingGraph } from './graph.js';
-import { edgeCost, minCostPerMeter, type EdgeKind, type RoutingProfile } from './weights.js';
+import { cumulativeLengths, haversineXY, slicePolyline, type LngLat } from './geo.js';
+import { edgeCoordinates, edgeDirection, getEdge, type GraphEdge, type RoutingGraph } from './graph.js';
+import { EDGE_KINDS, edgeCost, minCostPerMeter, type CostableEdge, type EdgeKind, type RoutingProfile } from './weights.js';
 
 export const DEFAULT_MAX_SNAP_DISTANCE_M = 500;
+
+/**
+ * A snap this close (m) to either end of an edge is treated as being at that
+ * junction. Stops routes gaining millimetre-long "legs" from float and
+ * fixed-point rounding when a point sits on a junction.
+ */
+const JUNCTION_SNAP_M = 0.5;
 
 /** A point on the network: a distance along a specific edge. */
 export interface SnappedPoint {
@@ -29,6 +37,10 @@ export interface RoutePlan {
   readonly legs: RouteLeg[];
   /** Metres travelled on each kind of edge. */
   readonly distanceByKind: Partial<Record<EdgeKind, number>>;
+  /** Metres travelled on each surface class. */
+  readonly distanceBySurface: Partial<Record<SurfaceClass, number>>;
+  /** Metres whose surface class was inferred rather than tagged. */
+  readonly inferredSurfaceM: number;
   readonly start: SnappedPoint;
   readonly end: SnappedPoint;
   readonly nodesSettled: number;
@@ -57,23 +69,21 @@ export function snapToNetwork(
   const hit = graph.edgeIndex.nearest(
     point,
     maxDistanceM,
-    component === undefined ? undefined : (edgeId) => graph.componentOf[graph.edges[edgeId]!.from] === component,
+    component === undefined ? undefined : (edgeId) => graph.componentOf[graph.edgeFrom[edgeId]!] === component,
   );
   if (!hit) return null;
-  const edge = graph.edges[hit.owner]!;
-  const cumulative = cumulativeLengths(edge.coordinates);
+  const cumulative = cumulativeLengths(edgeCoordinates(graph, hit.owner));
   const pieceStart = cumulative[hit.piece]!;
   const pieceLength = cumulative[hit.piece + 1]! - pieceStart;
-  return {
-    edgeId: edge.id,
-    alongM: Math.min(edge.lengthM, pieceStart + pieceLength * hit.projection.t),
-    point: hit.projection.point,
-    distanceM: hit.projection.distanceM,
-  };
+  const lengthM = graph.edgeLength[hit.owner]!;
+  let alongM = Math.min(lengthM, pieceStart + pieceLength * hit.projection.t);
+  if (alongM < JUNCTION_SNAP_M) alongM = 0;
+  else if (lengthM - alongM < JUNCTION_SNAP_M) alongM = lengthM;
+  return { edgeId: hit.owner, alongM, point: hit.projection.point, distanceM: hit.projection.distanceM };
 }
 
 const componentOfSnap = (graph: RoutingGraph, snap: SnappedPoint): number =>
-  graph.componentOf[graph.edges[snap.edgeId]!.from]!;
+  graph.componentOf[graph.edgeFrom[snap.edgeId]!]!;
 
 /**
  * The closest edge to a point is sometimes a short isolated fragment even
@@ -130,15 +140,31 @@ function edgeCosts(graph: RoutingGraph, profile: RoutingProfile): Float64Array {
   if (!byProfile) costCache.set(graph, (byProfile = new Map()));
   let costs = byProfile.get(profile.id);
   if (!costs) {
-    costs = Float64Array.from(graph.edges, (edge) => edgeCost(edge, profile));
+    costs = new Float64Array(graph.edgeCount);
+    // One reusable view object keeps this allocation-free over 1M+ edges
+    // while still going through the single `edgeCost` definition.
+    const view: { -readonly [K in keyof CostableEdge]: CostableEdge[K] } = {
+      lengthM: 0,
+      kind: 'unknown',
+      hazards: [],
+      surfaceClass: 'unknown',
+    };
+    for (let e = 0; e < graph.edgeCount; e++) {
+      view.lengthM = graph.edgeLength[e]!;
+      view.kind = EDGE_KINDS[graph.edgeKind[e]!]!;
+      view.hazards = graph.hazardSets[graph.edgeHazards[e]!]!;
+      view.surfaceClass = SURFACE_CLASSES[graph.edgeSurface[e]!]!;
+      costs[e] = edgeCost(view, profile);
+    }
     byProfile.set(profile.id, costs);
   }
   return costs;
 }
 
-function canTraverse(edge: GraphEdge, forward: boolean, profile: RoutingProfile): boolean {
-  if (!profile.respectOneWay || edge.direction === 'both') return true;
-  return forward === (edge.direction === 'forward');
+function canTraverse(graph: RoutingGraph, edge: number, forward: boolean, profile: RoutingProfile): boolean {
+  if (!profile.respectOneWay) return true;
+  const direction = edgeDirection(graph, edge);
+  return direction === 'both' || forward === (direction === 'forward');
 }
 
 /**
@@ -175,43 +201,50 @@ export function planRoute(
     };
   }
   const { start, end } = endpoints;
-  const startEdge = graph.edges[start.edgeId]!;
-  const endEdge = graph.edges[end.edgeId]!;
+  const startEdge = getEdge(graph, start.edgeId);
+  const endEdge = getEdge(graph, end.edgeId);
 
   const costs = edgeCosts(graph, profile);
-  const S = graph.nodes.length;
+  const S = graph.nodeCount;
   const T = S + 1;
   const costPerM = (edge: GraphEdge): number => (edge.lengthM > 0 ? costs[edge.id]! / edge.lengthM : 0);
   const startCostPerM = costPerM(startEdge);
   const endCostPerM = costPerM(endEdge);
   const heuristicScale = minCostPerMeter(profile);
+  const [endLng, endLat] = end.point;
+  const { nodeCoords, adjOffset, adjEdges, edgeFrom, edgeTo } = graph;
 
   const space: SearchSpace = {
-    nodeCount: graph.nodes.length + 2,
-    heuristic: (node) =>
-      node === T ? 0 : haversineMeters(node === S ? start.point : graph.nodes[node]!, end.point) * heuristicScale,
+    nodeCount: graph.nodeCount + 2,
+    heuristic: (node) => {
+      if (node === T) return 0;
+      if (node === S) return haversineXY(start.point[0], start.point[1], endLng, endLat) * heuristicScale;
+      return haversineXY(nodeCoords[node * 2]!, nodeCoords[node * 2 + 1]!, endLng, endLat) * heuristicScale;
+    },
     forEachArc(node, visit) {
       if (node === T) return;
       if (node === S) {
-        if (canTraverse(startEdge, false, profile)) visit(startEdge.from, start.alongM * startCostPerM, REF_START_TO_FROM);
-        if (canTraverse(startEdge, true, profile)) {
+        if (canTraverse(graph, startEdge.id, false, profile)) {
+          visit(startEdge.from, start.alongM * startCostPerM, REF_START_TO_FROM);
+        }
+        if (canTraverse(graph, startEdge.id, true, profile)) {
           visit(startEdge.to, (startEdge.lengthM - start.alongM) * startCostPerM, REF_START_TO_TO);
         }
-        if (start.edgeId === end.edgeId && canTraverse(startEdge, end.alongM >= start.alongM, profile)) {
+        if (start.edgeId === end.edgeId && canTraverse(graph, startEdge.id, end.alongM >= start.alongM, profile)) {
           visit(T, Math.abs(end.alongM - start.alongM) * startCostPerM, REF_START_TO_END);
         }
         return;
       }
-      for (const edgeId of graph.adjacency[node]!) {
-        const edge = graph.edges[edgeId]!;
-        const forward = edge.from === node;
-        if (!canTraverse(edge, forward, profile)) continue;
-        visit(forward ? edge.to : edge.from, costs[edgeId]!, edgeId);
+      for (let i = adjOffset[node]!; i < adjOffset[node + 1]!; i++) {
+        const edge = adjEdges[i]!;
+        const forward = edgeFrom[edge] === node;
+        if (!canTraverse(graph, edge, forward, profile)) continue;
+        visit(forward ? edgeTo[edge]! : edgeFrom[edge]!, costs[edge]!, edge);
       }
-      if (node === endEdge.from && canTraverse(endEdge, true, profile)) {
+      if (node === endEdge.from && canTraverse(graph, endEdge.id, true, profile)) {
         visit(T, end.alongM * endCostPerM, REF_FROM_TO_END);
       }
-      if (node === endEdge.to && canTraverse(endEdge, false, profile)) {
+      if (node === endEdge.to && canTraverse(graph, endEdge.id, false, profile)) {
         visit(T, (endEdge.lengthM - end.alongM) * endCostPerM, REF_TO_TO_END);
       }
     },
@@ -226,7 +259,9 @@ export function planRoute(
   const coordinates: LngLat[] = [];
   const legs: RouteLeg[] = [];
   const distanceByKind: Partial<Record<EdgeKind, number>> = {};
+  const distanceBySurface: Partial<Record<SurfaceClass, number>> = {};
   let distanceM = 0;
+  let inferredSurfaceM = 0;
 
   const append = (edge: GraphEdge, piece: LngLat[], lengthM: number): void => {
     // Consecutive pieces share their joining vertex; don't duplicate it.
@@ -234,6 +269,8 @@ export function planRoute(
     if (lengthM <= 0) return;
     distanceM += lengthM;
     distanceByKind[edge.kind] = (distanceByKind[edge.kind] ?? 0) + lengthM;
+    distanceBySurface[edge.surfaceClass] = (distanceBySurface[edge.surfaceClass] ?? 0) + lengthM;
+    if (edge.surfaceInferred) inferredSurfaceM += lengthM;
     const last = legs[legs.length - 1];
     if (last && last.kind === edge.kind && last.name === edge.name) {
       legs[legs.length - 1] = { ...last, lengthM: last.lengthM + lengthM };
@@ -260,8 +297,8 @@ export function planRoute(
       case REF_START_TO_END:
         return partial(startEdge, start.alongM, end.alongM);
       default: {
-        const edge = graph.edges[ref]!;
-        const piece = edge.from === fromNode ? [...edge.coordinates] : [...edge.coordinates].reverse();
+        const edge = getEdge(graph, ref);
+        const piece = edge.from === fromNode ? edge.coordinates : [...edge.coordinates].reverse();
         return append(edge, piece, edge.lengthM);
       }
     }
@@ -269,6 +306,17 @@ export function planRoute(
 
   return {
     ok: true,
-    route: { coordinates, distanceM, cost: result.cost, legs, distanceByKind, start, end, nodesSettled: result.settled },
+    route: {
+      coordinates,
+      distanceM,
+      cost: result.cost,
+      legs,
+      distanceByKind,
+      distanceBySurface,
+      inferredSurfaceM,
+      start,
+      end,
+      nodesSettled: result.settled,
+    },
   };
 }

@@ -2,9 +2,10 @@
  * Normalised infrastructure categories.
  *
  * The DTP Bicycle Infrastructure Network labels each segment with a
- * human-readable `InfraType`. We map those onto stable slugs so that routing
- * weights, map styling and the database CHECK constraint don't depend on the
- * exact wording of the source dataset.
+ * human-readable `InfraType`; OpenStreetMap ways are classified from their
+ * tags (see osm.ts). Both map onto these stable slugs, so routing weights,
+ * map styling and the database CHECK constraint don't depend on either
+ * source's exact vocabulary.
  */
 export const INFRA_CATEGORIES = [
   'shared_use_path',
@@ -15,6 +16,14 @@ export const INFRA_CATEGORIES = [
   'shared_parking_lane',
   'shared_street',
   'informal',
+  // From OpenStreetMap, filling the gaps between DTP infrastructure:
+  'footpath',
+  'trail',
+  'track',
+  'steps',
+  'quiet_street',
+  'road',
+  'busy_road',
   'unknown',
 ] as const;
 

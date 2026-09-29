@@ -13,7 +13,7 @@ const edge = (overrides: Partial<CostableEdge> = {}): CostableEdge => ({
   lengthM: 100,
   kind: 'shared_use_path',
   hazards: [],
-  surface: null,
+  surfaceClass: 'smooth',
   ...overrides,
 });
 
@@ -35,9 +35,20 @@ describe('edgeCost', () => {
     expect(hazardous).toBeCloseTo(base * 1.5 * 1.1, 9);
   });
 
-  it('applies surface multipliers, falling back to "unknown"', () => {
-    expect(edgeCost(edge({ surface: 'gravel' }), PREFER_PATHS_PROFILE)).toBeCloseTo(180, 9);
-    expect(edgeCost(edge({ surface: 'moon_dust' }), PREFER_PATHS_PROFILE)).toBe(100);
+  it('applies surface multipliers, preferring smoother ground', () => {
+    const cost = (surfaceClass: CostableEdge['surfaceClass']): number =>
+      edgeCost(edge({ surfaceClass }), PREFER_PATHS_PROFILE);
+    expect(cost('smooth')).toBe(100);
+    expect(cost('gravel')).toBeCloseTo(170, 9);
+    expect(cost('smooth')).toBeLessThan(cost('rough_paved'));
+    expect(cost('compacted')).toBeLessThan(cost('gravel'));
+    expect(cost('gravel')).toBeLessThan(cost('unpaved'));
+  });
+
+  it('makes a smooth quiet street cheaper than a gravel trail of equal length', () => {
+    const street = edgeCost(edge({ kind: 'quiet_street', surfaceClass: 'smooth' }), PREFER_PATHS_PROFILE);
+    const gravelTrail = edgeCost(edge({ kind: 'trail', surfaceClass: 'gravel' }), PREFER_PATHS_PROFILE);
+    expect(street).toBeLessThan(gravelTrail);
   });
 });
 

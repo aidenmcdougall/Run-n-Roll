@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { aStar, type SearchSpace } from '../src/routing/astar.js';
 import { haversineMeters } from '../src/routing/geo.js';
-import { buildGraph, type PathSegment } from '../src/routing/graph.js';
+import { buildGraph, getEdge, nodeCoordinate, type PathSegment } from '../src/routing/graph.js';
 import { planRoute } from '../src/routing/planner.js';
 import { PREFER_PATHS_PROFILE, SHORTEST_PROFILE, type RoutingProfile } from '../src/routing/weights.js';
 import { at, segment } from './helpers.js';
@@ -105,16 +105,17 @@ describe('aStar', () => {
       }
     }
     const graph = buildGraph(segments, { connectorToleranceM: 0 });
-    const target = graph.nodes.length - 1;
+    const target = graph.nodeCount - 1;
 
     const space = (useHeuristic: boolean): SearchSpace => ({
-      nodeCount: graph.nodes.length,
-      heuristic: (node) => (useHeuristic ? haversineMeters(graph.nodes[node]!, graph.nodes[target]!) : 0),
+      nodeCount: graph.nodeCount,
+      heuristic: (node) =>
+        useHeuristic ? haversineMeters(nodeCoordinate(graph, node), nodeCoordinate(graph, target)) : 0,
       forEachArc(node, visit) {
-        for (const id of graph.adjacency[node]!) {
-          const e = graph.edges[id]!;
+        for (let i = graph.adjOffset[node]!; i < graph.adjOffset[node + 1]!; i++) {
+          const e = getEdge(graph, graph.adjEdges[i]!);
           const mult = PREFER_PATHS_PROFILE.kindMultipliers[e.kind];
-          visit(e.from === node ? e.to : e.from, e.lengthM * mult, id);
+          visit(e.from === node ? e.to : e.from, e.lengthM * mult, e.id);
         }
       },
     });
@@ -146,5 +147,46 @@ describe('planRoute snapping across components', () => {
   it('still reports NO_ROUTE when no connected alternative is within range', () => {
     const graph = buildGraph([segment([[0, 0], [100, 0]]), segment([[5000, 0], [5100, 0]])], { connectorToleranceM: 0 });
     expect(planRoute(graph, at(0, 0), at(5100, 0), SHORTEST_PROFILE)).toMatchObject({ ok: false, code: 'NO_ROUTE' });
+  });
+});
+
+describe('planRoute surfaces', () => {
+  it('avoids a gravel shortcut in favour of a smooth path when the detour is modest', () => {
+    const graph = buildGraph([
+      segment([[0, 0], [1000, 0]], 'trail', { surfaceClass: 'gravel' }),
+      segment([[0, 0], [500, 300], [1000, 0]], 'shared_use_path', { surfaceClass: 'smooth' }),
+    ]);
+    const result = planRoute(graph, at(0, 0), at(1000, 0), PREFER_PATHS_PROFILE);
+    expect(result.ok && result.route.distanceBySurface).toEqual({ smooth: expect.any(Number) });
+  });
+
+  it('reports how much of the route has an inferred surface', () => {
+    const graph = buildGraph([
+      segment([[0, 0], [400, 0]], 'quiet_street', { surfaceClass: 'paved', surfaceInferred: true }),
+      segment([[400, 0], [1000, 0]], 'shared_use_path', { surfaceClass: 'smooth' }),
+    ]);
+    const result = planRoute(graph, at(0, 0), at(1000, 0), PREFER_PATHS_PROFILE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.inferredSurfaceM).toBeCloseTo(400, 0);
+    expect(result.route.distanceBySurface.paved).toBeCloseTo(400, 0);
+  });
+});
+
+describe('aStar state reuse', () => {
+  it('gives identical results for repeated and interleaved searches on the same graph', () => {
+    const graph = buildGraph(detourNetwork());
+    const first = planRoute(graph, at(0, 0), at(1000, 0), PREFER_PATHS_PROFILE);
+    planRoute(graph, at(1000, 0), at(0, 0), SHORTEST_PROFILE); // different search in between
+    const again = planRoute(graph, at(0, 0), at(1000, 0), PREFER_PATHS_PROFILE);
+    expect(again).toEqual(first);
+  });
+
+  it('works across graphs of different sizes', () => {
+    const small = buildGraph([segment([[0, 0], [100, 0]])]);
+    const large = buildGraph(detourNetwork());
+    expect(planRoute(large, at(0, 0), at(1000, 0), SHORTEST_PROFILE).ok).toBe(true);
+    expect(planRoute(small, at(10, 0), at(90, 0), SHORTEST_PROFILE).ok).toBe(true);
+    expect(planRoute(large, at(0, 0), at(1000, 0), SHORTEST_PROFILE).ok).toBe(true);
   });
 });

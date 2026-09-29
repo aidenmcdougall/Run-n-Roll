@@ -22,12 +22,14 @@ export function segment(
 ): PathSegment {
   return {
     id: nextId++,
-    coordinates: points.map(([e, n]) => at(e, n)),
+    coordinates: Float64Array.from(points.flatMap(([e, n]) => at(e, n))),
     category,
     name: null,
     hazards: [],
-    surface: null,
+    surfaceClass: 'smooth',
+    surfaceInferred: false,
     direction: 'both',
+    bridgeGaps: true,
     ...overrides,
   };
 }

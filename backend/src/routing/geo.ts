@@ -6,11 +6,15 @@ const DEG_TO_RAD = Math.PI / 180;
 
 /** Great-circle distance in metres between two WGS84 coordinates. */
 export function haversineMeters(a: LngLat, b: LngLat): number {
-  const dLat = (b[1] - a[1]) * DEG_TO_RAD;
-  const dLng = (b[0] - a[0]) * DEG_TO_RAD;
-  const lat1 = a[1] * DEG_TO_RAD;
-  const lat2 = b[1] * DEG_TO_RAD;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return haversineXY(a[0], a[1], b[0], b[1]);
+}
+
+/** As `haversineMeters`, on raw numbers: avoids allocating tuples in hot loops. */
+export function haversineXY(lng1: number, lat1: number, lng2: number, lat2: number): number {
+  const dLat = (lat2 - lat1) * DEG_TO_RAD;
+  const dLng = (lng2 - lng1) * DEG_TO_RAD;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * DEG_TO_RAD) * Math.cos(lat2 * DEG_TO_RAD) * Math.sin(dLng / 2) ** 2;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
@@ -41,16 +45,28 @@ export interface SegmentProjection {
  * snap across, and much cheaper than true geodesic projection.
  */
 export function projectOntoSegment(p: LngLat, a: LngLat, b: LngLat): SegmentProjection {
-  const kx = Math.cos(p[1] * DEG_TO_RAD);
-  const ax = a[0] * kx;
-  const ay = a[1];
-  const dx = b[0] * kx - ax;
-  const dy = b[1] - ay;
+  return projectOntoSegmentXY(p[0], p[1], a[0], a[1], b[0], b[1]);
+}
+
+/** As `projectOntoSegment`, on raw numbers (P, then segment A→B). */
+export function projectOntoSegmentXY(
+  pLng: number,
+  pLat: number,
+  aLng: number,
+  aLat: number,
+  bLng: number,
+  bLat: number,
+): SegmentProjection {
+  const kx = Math.cos(pLat * DEG_TO_RAD);
+  const ax = aLng * kx;
+  const dx = bLng * kx - ax;
+  const dy = bLat - aLat;
   const lenSq = dx * dx + dy * dy;
-  let t = lenSq === 0 ? 0 : ((p[0] * kx - ax) * dx + (p[1] - ay) * dy) / lenSq;
+  let t = lenSq === 0 ? 0 : ((pLng * kx - ax) * dx + (pLat - aLat) * dy) / lenSq;
   t = Math.max(0, Math.min(1, t));
-  const point: LngLat = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-  return { point, t, distanceM: haversineMeters(p, point) };
+  const lng = aLng + (bLng - aLng) * t;
+  const lat = aLat + (bLat - aLat) * t;
+  return { point: [lng, lat], t, distanceM: haversineXY(pLng, pLat, lng, lat) };
 }
 
 /**
