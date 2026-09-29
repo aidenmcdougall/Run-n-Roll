@@ -132,3 +132,37 @@ code { font-size: 12px; background: rgba(0, 0, 0, 0.06); padding: 1px 4px; borde
 .note-points { color: #dc2626; font-variant-numeric: tabular-nums; font-size: 12px; }
 .score-suggestion { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
 .score-suggestion button { white-space: nowrap; background: #fff; }
+
+/* Waypoint rows double as address search (see PlaceField). At rest they look
+   like plain text; the field only appears on hover/focus. */
+.place-field { position: relative; }
+.place-field-body { flex: 1; min-width: 0; position: relative; }
+.place-input {
+  width: 100%; margin: 0 0 0 -6px; padding: 2px 6px;
+  font: inherit; color: var(--fg); font-variant-numeric: tabular-nums;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  text-overflow: ellipsis;
+}
+.place-input::placeholder { color: var(--muted); }
+.place-input:hover { background: #f3f4f6; }
+.place-input:focus { outline: none; background: #fff; border-color: #cbd5e1; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25); }
+.place-field.is-picking .place-input::placeholder { color: var(--accent); }
+.place-field.is-picking .waypoint-badge { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.place-results {
+  position: absolute; top: calc(100% + 4px); left: -6px; right: 0; z-index: 10;
+  margin: 0; padding: 4px; list-style: none; max-height: 280px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+.place-results li { display: flex; flex-direction: column; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.place-results li.is-active { background: #f3f4f6; }
+.place-name { font-size: 14px; }
+.place-detail { font-size: 12px; color: var(--muted); }
+.place-results .place-status { cursor: default; color: var(--muted); font-size: 13px; }
+
+.pick-button { width: 30px; height: 30px; padding: 0; font-size: 17px; line-height: 1; flex-shrink: 0; }
+.pick-button.active { background: var(--fg); border-color: var(--fg); color: #fff; }
+
+/* Crosshair while choosing a point (overrides the hover cursor set in MapView). */
+.maplibregl-canvas.is-picking { cursor: crosshair !important; }

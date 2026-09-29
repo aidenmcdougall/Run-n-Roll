@@ -113,3 +113,12 @@ export interface NetworkInfo {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };
 }
+
+/** A geocoded place (see backend services/geocoder.ts). */
+export interface Place {
+  id: string;
+  name: string;
+  detail: string | null;
+  point: LngLatTuple;
+  category: string;
+}

@@ -1,22 +1,26 @@
 import { z } from 'zod';
+import { isInVictoriaBounds } from '../domain/region.js';
+
+export { VICTORIA_BOUNDS } from '../domain/region.js';
+
+const IN_VICTORIA = { message: 'Point must be within Victoria, Australia' } as const;
 
 /**
- * Generous bounding box around the State of Victoria. Points outside it are
- * rejected early: the network only covers Victoria, and this catches
- * swapped lat/lng pairs, which is the most common client bug with coordinates.
+ * A point in a JSON body. Points outside Victoria are rejected early: the
+ * network only covers Victoria, and this catches swapped lat/lng pairs, the
+ * most common client bug with coordinates.
  */
-export const VICTORIA_BOUNDS = { minLng: 140.9, maxLng: 150.1, minLat: -39.3, maxLat: -33.9 } as const;
-
 export const LngLatSchema = z
   .object({
     lng: z.number(),
     lat: z.number(),
   })
-  .refine(
-    ({ lng, lat }) =>
-      lng >= VICTORIA_BOUNDS.minLng &&
-      lng <= VICTORIA_BOUNDS.maxLng &&
-      lat >= VICTORIA_BOUNDS.minLat &&
-      lat <= VICTORIA_BOUNDS.maxLat,
-    { message: 'Point must be within Victoria, Australia' },
-  );
+  .refine(({ lng, lat }) => isInVictoriaBounds(lng, lat), IN_VICTORIA);
+
+/** The same, from query-string parameters (`?lat=…&lng=…`). */
+export const LngLatQuerySchema = z
+  .object({
+    lng: z.coerce.number(),
+    lat: z.coerce.number(),
+  })
+  .refine(({ lng, lat }) => isInVictoriaBounds(lng, lat), IN_VICTORIA);

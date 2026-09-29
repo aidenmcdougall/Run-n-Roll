@@ -1,5 +1,13 @@
 import { apiUrl } from '../config';
-import type { ApiErrorBody, LngLatPoint, NetworkInfo, ProfilesResponse, RouteFeature, RoutePreferences } from './types';
+import type {
+  ApiErrorBody,
+  LngLatPoint,
+  NetworkInfo,
+  Place,
+  ProfilesResponse,
+  RouteFeature,
+  RoutePreferences,
+} from './types';
 
 /** An error returned by the API, carrying its machine-readable code. */
 export class ApiError extends Error {
@@ -42,5 +50,17 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<RouteFeature> =>
     request('/api/routes', { method: 'POST', body: JSON.stringify({ start, end, profile, preferences }), signal }),
+  searchPlaces: async (query: string, near: LngLatPoint | null, signal?: AbortSignal): Promise<Place[]> => {
+    const params = new URLSearchParams({ q: query });
+    if (near) {
+      params.set('lat', near.lat.toFixed(4));
+      params.set('lng', near.lng.toFixed(4));
+    }
+    return (await request<{ places: Place[] }>(`/api/geocode/search?${params}`, { signal })).places;
+  },
+  reversePlace: async (point: LngLatPoint, signal?: AbortSignal): Promise<Place | null> => {
+    const params = new URLSearchParams({ lat: point.lat.toFixed(5), lng: point.lng.toFixed(5) });
+    return (await request<{ place: Place | null }>(`/api/geocode/reverse?${params}`, { signal })).place;
+  },
   pathTilesUrl: (): string => apiUrl('/api/tiles/paths/{z}/{x}/{y}.pbf'),
 };

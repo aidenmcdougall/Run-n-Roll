@@ -39,8 +39,17 @@ const stringProp = (value: unknown): string | null => (typeof value === 'string'
 
 export type Waypoint = 'start' | 'end';
 
+/** Ask the map to bring points into view; a new `id` triggers a new move. */
+export interface FocusRequest {
+  points: LngLatPoint[];
+  id: number;
+}
+
 interface MapViewProps {
   colorMode: ColorMode;
+  /** Show a crosshair cursor: the next click places a waypoint. */
+  picking: boolean;
+  focus: FocusRequest | null;
   start: LngLatPoint | null;
   end: LngLatPoint | null;
   route: RouteFeature | null;
@@ -61,7 +70,7 @@ function createMarker(className: string, label: string): Marker {
   return new Marker({ element: el, draggable: true });
 }
 
-export function MapView({ colorMode, start, end, route, onMapClick, onWaypointMoved, onHoverPath }: MapViewProps) {
+export function MapView({ colorMode, picking, focus, start, end, route, onMapClick, onWaypointMoved, onHoverPath }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Record<Waypoint, Marker | null>>({ start: null, end: null });
@@ -192,6 +201,34 @@ export function MapView({ colorMode, start, end, route, onMapClick, onWaypointMo
     sync('start', start, 'waypoint-start', 'A');
     sync('end', end, 'waypoint-end', 'B');
   }, [start, end]);
+
+  // --- crosshair while choosing a point on the map ----------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) map.getCanvas().classList.toggle('is-picking', picking);
+  }, [picking]);
+
+  // --- fly to requested points (e.g. a searched address) --------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focus || focus.points.length === 0) return;
+    // Keep points clear of the side panel on wide screens.
+    const panelInset = window.innerWidth > 640 ? 380 : 0;
+    if (focus.points.length === 1) {
+      const [p] = focus.points;
+      map.flyTo({ center: [p!.lng, p!.lat], zoom: Math.max(map.getZoom(), 15), padding: { left: panelInset, top: 0, right: 0, bottom: 0 } });
+    } else {
+      const lngs = focus.points.map((p) => p.lng);
+      const lats = focus.points.map((p) => p.lat);
+      map.fitBounds(
+        [
+          [Math.min(...lngs), Math.min(...lats)],
+          [Math.max(...lngs), Math.max(...lats)],
+        ],
+        { padding: { left: panelInset + 60, top: 80, right: 80, bottom: 80 }, maxZoom: 16 },
+      );
+    }
+  }, [focus]);
 
   // --- restyle paths when the colour mode changes ---------------------------------
   useEffect(() => {

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api/client';
-import type { LngLatPoint, NetworkInfo, RoutingProfile } from './api/types';
+import type { LngLatPoint, NetworkInfo, Place, RoutingProfile } from './api/types';
 import { useRoute } from './api/useRoute';
 import { Legend } from './components/Legend';
+import { PlaceField } from './components/PlaceField';
 import { Preferences } from './components/Preferences';
 import { RouteSummary } from './components/RouteSummary';
-import { MapView, type HoveredPath, type Waypoint } from './map/MapView';
+import { MapView, type FocusRequest, type HoveredPath, type Waypoint } from './map/MapView';
 import { EDGE_KIND_STYLE, SURFACE_STYLE, type ColorMode } from './map/pathStyle';
 import type { EdgeKind, RoutePreferences, SurfaceClass } from './api/types';
 
@@ -39,13 +40,22 @@ function loadPreferences(): RoutePreferences {
   }
 }
 
-function formatPoint(point: LngLatPoint | null): string {
-  return point ? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}` : '—';
+/** Short label for a reverse-geocoded pin, e.g. "Near Barassi Way, Jolimont". */
+function nearLabel(place: Place): string {
+  const suburb = place.detail?.split(', ').pop()?.replace(/\s*\d{4}$/, '');
+  return `Near ${place.name}${suburb && suburb !== place.name ? `, ${suburb}` : ''}`;
 }
 
 export default function App() {
   const [start, setStart] = useState<LngLatPoint | null>(null);
   const [end, setEnd] = useState<LngLatPoint | null>(null);
+  const [startName, setStartName] = useState<string | null>(null);
+  const [endName, setEndName] = useState<string | null>(null);
+  // While set, the next map click places this waypoint.
+  const [picking, setPicking] = useState<Waypoint | null>(null);
+  const [focus, setFocus] = useState<FocusRequest | null>(null);
+  // Guards against a slow reverse lookup labelling a pin that has since moved.
+  const labelRequest = useRef<Record<Waypoint, number>>({ start: 0, end: 0 });
   const [profiles, setProfiles] = useState<RoutingProfile[]>([]);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [network, setNetwork] = useState<NetworkInfo | null>(null);
@@ -91,25 +101,56 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // First click sets the start, subsequent clicks set (or move) the destination.
+  /**
+   * Sets a waypoint. Without a name (map click, drag, geolocation), it's
+   * labelled by reverse geocoding; until that returns, coordinates show.
+   */
+  const placeWaypoint = useCallback((which: Waypoint, point: LngLatPoint | null, name: string | null = null) => {
+    (which === 'start' ? setStart : setEnd)(point);
+    const setName = which === 'start' ? setStartName : setEndName;
+    setName(name);
+    const request = ++labelRequest.current[which];
+    if (!point || name) return;
+    api
+      .reversePlace(point)
+      .then((place) => {
+        if (place && labelRequest.current[which] === request) setName(nearLabel(place));
+      })
+      .catch(() => undefined); // coordinates remain as the label
+  }, []);
+
+  // A pending "choose on map" wins; otherwise the first click sets the start
+  // and later clicks set (or move) the destination.
   const handleMapClick = useCallback(
     (point: LngLatPoint) => {
-      if (!start) setStart(point);
-      else setEnd(point);
+      const which: Waypoint = picking ?? (start ? 'end' : 'start');
+      placeWaypoint(which, point);
+      setPicking(null);
     },
-    [start],
+    [picking, start, placeWaypoint],
   );
 
-  const handleWaypointMoved = useCallback((which: Waypoint, point: LngLatPoint) => {
-    (which === 'start' ? setStart : setEnd)(point);
-  }, []);
+  const handleWaypointMoved = useCallback(
+    (which: Waypoint, point: LngLatPoint) => placeWaypoint(which, point),
+    [placeWaypoint],
+  );
+
+  /** A search result was chosen: set it and bring it (and the other point) into view. */
+  const handlePlaceSelected = (which: Waypoint, point: LngLatPoint, name: string) => {
+    placeWaypoint(which, point, name);
+    setPicking(null);
+    const other = which === 'start' ? end : start;
+    setFocus({ points: other ? [point, other] : [point], id: Date.now() });
+  };
 
   const useMyLocation = () => {
     if (!navigator.geolocation) return;
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        setStart({ lng: coords.longitude, lat: coords.latitude });
+        const point = { lng: coords.longitude, lat: coords.latitude };
+        placeWaypoint('start', point);
+        setFocus({ points: end ? [point, end] : [point], id: Date.now() });
         setLocating(false);
       },
       () => setLocating(false),
@@ -125,6 +166,8 @@ export default function App() {
         start={start}
         end={end}
         route={routeState.status === 'success' ? routeState.route : null}
+        picking={picking !== null}
+        focus={focus}
         onMapClick={handleMapClick}
         onWaypointMoved={handleWaypointMoved}
         onHoverPath={setHovered}
@@ -145,22 +188,26 @@ export default function App() {
         {network?.status === 'loading' && <div className="alert">Building the routing network…</div>}
 
         <section>
-          <div className="waypoint">
-            <span className="waypoint-badge waypoint-start">A</span>
-            <div>
-              <div className="waypoint-label">Start</div>
-              <div className="waypoint-value">{start ? formatPoint(start) : 'Click the map to set'}</div>
-            </div>
-          </div>
-          <div className="waypoint">
-            <span className="waypoint-badge waypoint-end">B</span>
-            <div>
-              <div className="waypoint-label">Destination</div>
-              <div className="waypoint-value">
-                {end ? formatPoint(end) : start ? 'Click the map to set' : '—'}
-              </div>
-            </div>
-          </div>
+          <PlaceField
+            badge="A"
+            label="Start"
+            point={start}
+            placeName={startName}
+            near={end}
+            picking={picking === 'start'}
+            onSelect={(point, name) => handlePlaceSelected('start', point, name)}
+            onPickOnMap={() => setPicking(picking === 'start' ? null : 'start')}
+          />
+          <PlaceField
+            badge="B"
+            label="Destination"
+            point={end}
+            placeName={endName}
+            near={start}
+            picking={picking === 'end'}
+            onSelect={(point, name) => handlePlaceSelected('end', point, name)}
+            onPickOnMap={() => setPicking(picking === 'end' ? null : 'end')}
+          />
           <div className="button-row">
             <button type="button" onClick={useMyLocation} disabled={locating}>
               {locating ? 'Locating…' : 'Start from my location'}
@@ -170,6 +217,8 @@ export default function App() {
               onClick={() => {
                 setStart(end);
                 setEnd(start);
+                setStartName(endName);
+                setEndName(startName);
               }}
               disabled={!start || !end}
             >
@@ -178,8 +227,9 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setStart(null);
-                setEnd(null);
+                placeWaypoint('start', null);
+                placeWaypoint('end', null);
+                setPicking(null);
               }}
               disabled={!start && !end}
             >

@@ -44,7 +44,7 @@ npm run osm:build            # merge OSM into the network + add surfaces (~8 min
 npm run dev                  # API on :3001, web app on http://localhost:5173
 ```
 
-Open <http://localhost:5173>. Click the map once to set the start (A) and again to set the destination (B), and drag either marker to re-route. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Each route shows a **skate score** and a **run score**; tap one to see what's behind it. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
+Open <http://localhost:5173>. Set the start (A) and destination (B) by **typing an address or place** into either row, or by clicking the map: the first click sets A, later clicks set B. To move one pin, press its **⌖** button and click the map, or just drag the marker. Dropped pins are labelled with the nearest street. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Each route shows a **skate score** and a **run score**; tap one to see what's behind it. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
 
 To refresh everything later: `npm run data:refresh`, then restart the API.
 
@@ -271,6 +271,8 @@ All tables are data, returned by `GET /api/routes/profiles` under `scoring`, and
 | `GET` | `/api/tiles/paths/{z}/{x}/{y}.pbf` | Vector tile, layer `paths` (z ≥ 8). Properties include `source`, `infra_category`, `surface`, `surface_class`, `surface_inferred`, `smoothness`, `width_m`, `hazards`. |
 | `GET` | `/api/routes/profiles` | Routing profiles and their weights |
 | `POST` | `/api/routes` | Plan a route |
+| `GET` | `/api/geocode/search?q=&lat=&lng=` | Address and place search in Victoria, optionally biased towards a point |
+| `GET` | `/api/geocode/reverse?lat=&lng=` | Nearest street to a point (labels dropped pins) |
 
 ```http
 POST /api/routes
@@ -302,12 +304,23 @@ Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
 | 422 | `START_NOT_NEAR_NETWORK`, `END_NOT_NEAR_NETWORK`, `NO_ROUTE` |
 | 503 | `NETWORK_LOADING`, `NETWORK_EMPTY`, `NETWORK_UNAVAILABLE` |
 
+### Address search ([`services/geocoder.ts`](backend/src/services/geocoder.ts))
+
+Search goes through our own `/api/geocode` endpoints to a **Photon** geocoder ([komoot/photon](https://github.com/komoot/photon)), an OpenStreetMap search engine built for search-as-you-type. Nominatim's usage policy forbids search-as-you-type, and self-hosting Vicmap Address is a much bigger undertaking.
+
+- **Proxied, not called from the browser.** One place to swap providers (`GEOCODER_URL` can point at a self-hosted Photon), a proper `User-Agent`, and a 24-hour cache so repeated keystrokes don't hit the provider.
+- **Victoria only.** Results are limited to Victoria's bounding box *and* filtered on `state = Victoria`, because the box also covers part of southern NSW ("albert park lake" otherwise returns Lake Albert, Wagga Wagga). Bus, tram and train stops are excluded, since they crowd out real places.
+- **Reverse geocoding uses street level**, so a dropped pin reads "Near Barassi Way, Jolimont" rather than naming the nearest statue.
+- The UI debounces typing (300 ms, minimum 3 characters) and cancels stale requests. Enter pressed before results arrive takes the top result when they come in.
+
+OSM house-number coverage in Victoria is incomplete, so a specific street address may match a nearby one. Vicmap Address would fix that (see Roadmap).
+
 ## Development
 
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | API (tsx watch) and web app (Vite) together |
-| `npm test` | Backend unit + HTTP tests (vitest, 148 tests) |
+| `npm test` | Backend unit + HTTP tests (vitest, 165 tests) |
 | `npm run typecheck` | Strict `tsc` for both packages |
 | `npm run build` | Compile the API to `backend/dist`, bundle the web app to `frontend/dist` |
 | `npm run db:up` / `db:down` | Start or stop the PostGIS container (data persists in a Docker volume) |
@@ -330,5 +343,6 @@ Configuration comes from the single repo-root `.env`, shared by Docker Compose, 
 1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data, built on the preference layer. A skate profile would *route* by the same factors the skate score *rates* with. **Couples mode** would combine two people's profiles and preferences (e.g. the worse multiplier of the two per edge).
 2. **Distance-targeted routes and loops:** "10 km loop from here", and 5/10/15/20 km suggestions.
 3. **Elevation:** slope costs from a DEM (e.g. Vicmap Elevation) and steep-hill avoidance.
-4. **More surface data:** Vicmap sealed/unsealed for rural roads, and City of Melbourne surface condition for the CBD.
-5. Road-crossing penalties, GPX export, saved and shared routes, "Explore near me", and a mobile-first UI.
+4. **Official addresses:** Vicmap Address for complete house-number search.
+5. **More surface data:** Vicmap sealed/unsealed for rural roads, and City of Melbourne surface condition for the CBD.
+6. Road-crossing penalties, GPX export, saved and shared routes, "Explore near me", and a mobile-first UI.
