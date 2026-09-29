@@ -46,6 +46,7 @@ interface ResponseJson {
     inferredSurfaceM: number;
     preferences: Record<string, unknown>;
     avoidedSurfaceM: number;
+    scores: Record<'skate' | 'run', { score: number; rating: string; confidence: string; notes: unknown[] }>;
   };
   error?: { code: string };
 }
@@ -70,6 +71,8 @@ describe('POST /api/routes', () => {
     expect(json.properties?.distanceM).toBeCloseTo(800, 0);
     expect(json.properties?.legs).toEqual([{ kind: 'shared_use_path', name: 'Test Trail', lengthM: expect.any(Number) }]);
     expect(json.properties?.distanceBySurface).toEqual({ smooth: expect.any(Number) });
+    expect(json.properties?.scores.skate).toMatchObject({ score: 100, rating: 'great', confidence: 'high' });
+    expect(json.properties?.scores.run.rating).toBe('great');
     expect(json.properties?.inferredSurfaceM).toBe(0);
   });
 

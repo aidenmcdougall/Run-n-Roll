@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { isInfraCategory } from '../domain/infrastructure.js';
 import { BIN_SOURCE } from '../domain/sources.js';
-import { effectiveSurface } from '../domain/surface.js';
+import { effectiveSurface, parseSmoothness } from '../domain/surface.js';
 import { buildGraph, type PathSegment, type RoutingGraph, type TravelDirection } from '../routing/graph.js';
 
 interface PathRow {
@@ -11,6 +11,7 @@ interface PathRow {
   name: string | null;
   hazards: string[];
   surface: string | null;
+  smoothness: string | null;
   direction: TravelDirection;
   is_sidewalk: boolean;
   wkb: Buffer;
@@ -100,7 +101,7 @@ export class NetworkService implements NetworkStateProvider {
       await client.query('BEGIN READ ONLY');
       await client.query(
         `DECLARE path_rows NO SCROLL CURSOR FOR
-         SELECT id, source, infra_category, name, hazards, surface, direction,
+         SELECT id, source, infra_category, name, hazards, surface, smoothness, direction,
                 coalesce(osm_tags->>'footway' = 'sidewalk', false) AS is_sidewalk,
                 ST_AsBinary(geom) AS wkb
          FROM paths`,
@@ -119,6 +120,7 @@ export class NetworkService implements NetworkStateProvider {
             hazards: row.hazards,
             surfaceClass: surface.surfaceClass,
             surfaceInferred: surface.inferred,
+            smoothness: parseSmoothness(row.smoothness),
             direction: row.direction,
             bridgeGaps: row.source === BIN_SOURCE,
           });

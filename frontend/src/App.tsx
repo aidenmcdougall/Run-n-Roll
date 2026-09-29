@@ -209,7 +209,10 @@ export default function App() {
               )}
             </div>
           )}
-          {routeState.status === 'success' && <RouteSummary route={routeState.route} />}
+          {routeState.status === 'success' && <RouteSummary
+              route={routeState.route}
+              onSurfaceChange={(surface) => setPreferences((current) => ({ ...current, surface }))}
+            />}
           {routeState.status === 'idle' && (
             <p className="hint">Tip: drag the A/B markers to adjust the route.</p>
           )}

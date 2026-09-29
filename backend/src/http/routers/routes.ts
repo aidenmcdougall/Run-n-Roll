@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { LngLat } from '../../routing/geo.js';
 import { planRoute, type PlanErrorCode } from '../../routing/planner.js';
+import { RUN_MODEL, scoreRoute, SKATE_MODEL } from '../../routing/scoring.js';
 import {
   applyPreferences,
   avoidedSurfaces,
@@ -62,6 +63,7 @@ export function routesRouter(network: NetworkStateProvider): Router {
         stepsPenalty: STEPS_PENALTY,
         busyRoadPenalty: BUSY_ROAD_PENALTY,
       },
+      scoring: { skate: SKATE_MODEL, run: RUN_MODEL },
     });
   });
 
@@ -100,6 +102,7 @@ export function routesRouter(network: NetworkStateProvider): Router {
         profile: baseProfile.id,
         preferences: body.preferences,
         avoidedSurfaceM: round(avoidedSurfaceM),
+        scores: scoreRoute(route.stretches),
         distanceM: round(route.distanceM),
         cost: round(route.cost),
         legs: route.legs.map((leg) => ({ ...leg, lengthM: round(leg.lengthM) })),

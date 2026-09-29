@@ -130,3 +130,27 @@ export function surfaceClassSql(surface: string, category: string, isSidewalk: s
     inferred: `(${surface} IS NULL AND ${sealed})`,
   };
 }
+
+/**
+ * OSM `smoothness` levels, best to worst
+ * (https://wiki.openstreetmap.org/wiki/Key:smoothness). Rarely tagged (~2%
+ * of ways), but when present it's the best signal for skating: it describes
+ * the ride quality directly rather than the material.
+ */
+export const SMOOTHNESS_LEVELS = [
+  'excellent', // skates, roller blades
+  'good', // racing bikes
+  'intermediate', // city bikes, wheelchairs
+  'bad', // robust wheels
+  'very_bad', // high-clearance vehicles
+  'horrible',
+  'very_horrible',
+  'impassable',
+] as const;
+
+export type Smoothness = (typeof SMOOTHNESS_LEVELS)[number];
+
+export function parseSmoothness(raw: string | null | undefined): Smoothness | null {
+  const value = raw?.trim().toLowerCase();
+  return value && (SMOOTHNESS_LEVELS as readonly string[]).includes(value) ? (value as Smoothness) : null;
+}

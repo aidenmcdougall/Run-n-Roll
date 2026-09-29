@@ -1,5 +1,5 @@
 import type { InfraCategory } from '../domain/infrastructure.js';
-import { SURFACE_CLASSES, type SurfaceClass } from '../domain/surface.js';
+import { SMOOTHNESS_LEVELS, SURFACE_CLASSES, type Smoothness, type SurfaceClass } from '../domain/surface.js';
 import { haversineXY, type LngLat } from './geo.js';
 import { SegmentGrid, type PieceSource } from './spatialGrid.js';
 import { EDGE_KINDS, type EdgeKind } from './weights.js';
@@ -19,6 +19,8 @@ export interface PathSegment {
   readonly surfaceClass: SurfaceClass;
   /** True when `surfaceClass` was assumed rather than tagged. */
   readonly surfaceInferred: boolean;
+  /** OSM smoothness, when tagged. */
+  readonly smoothness: Smoothness | null;
   /** Permitted bike travel relative to the coordinate order. */
   readonly direction: TravelDirection;
   /**
@@ -42,6 +44,7 @@ export interface GraphEdge {
   readonly hazards: readonly string[];
   readonly surfaceClass: SurfaceClass;
   readonly surfaceInferred: boolean;
+  readonly smoothness: Smoothness | null;
   readonly direction: TravelDirection;
   readonly lengthM: number;
   /** Geometry from `from` to `to`, inclusive of both node coordinates. */
@@ -81,6 +84,8 @@ export interface RoutingGraph {
   readonly edgeSurface: Uint8Array;
   /** Bit 0: surface inferred. Bits 1–2: index into DIRECTIONS. */
   readonly edgeFlags: Uint8Array;
+  /** 0 = untagged, otherwise 1 + index into SMOOTHNESS_LEVELS. */
+  readonly edgeSmoothness: Uint8Array;
   /** Source `paths.id`, or -1 for connectors. */
   readonly edgePathId: Int32Array;
   /** Index into `names`, or -1. */
@@ -149,6 +154,11 @@ export function edgeDirection(graph: RoutingGraph, edge: number): TravelDirectio
   return DIRECTIONS[(graph.edgeFlags[edge]! >> 1) & 3]!;
 }
 
+export function edgeSmoothness(graph: RoutingGraph, edge: number): Smoothness | null {
+  const value = graph.edgeSmoothness[edge]!;
+  return value === 0 ? null : SMOOTHNESS_LEVELS[value - 1]!;
+}
+
 export function getEdge(graph: RoutingGraph, id: number): GraphEdge {
   const pathId = graph.edgePathId[id]!;
   const name = graph.edgeName[id]!;
@@ -162,6 +172,7 @@ export function getEdge(graph: RoutingGraph, id: number): GraphEdge {
     hazards: graph.hazardSets[graph.edgeHazards[id]!]!,
     surfaceClass: SURFACE_CLASSES[graph.edgeSurface[id]!]!,
     surfaceInferred: (graph.edgeFlags[id]! & INFERRED_BIT) !== 0,
+    smoothness: edgeSmoothness(graph, id),
     direction: edgeDirection(graph, id),
     lengthM: graph.edgeLength[id]!,
     coordinates: edgeCoordinates(graph, id),
@@ -251,6 +262,7 @@ interface EdgeAttributes {
   hazards: readonly string[];
   surfaceClass: SurfaceClass;
   surfaceInferred: boolean;
+  smoothness: Smoothness | null;
   direction: TravelDirection;
 }
 
@@ -261,6 +273,7 @@ const CONNECTOR_ATTRIBUTES: EdgeAttributes = {
   hazards: [],
   surfaceClass: 'unknown',
   surfaceInferred: false,
+  smoothness: null,
   direction: 'both',
 };
 
@@ -389,6 +402,7 @@ export function buildGraph(input: readonly PathSegment[], options: BuildGraphOpt
   const edgeKind = growUint8(totalPoints);
   const edgeSurface = growUint8(totalPoints);
   const edgeFlags = growUint8(totalPoints);
+  const edgeSmoothnessArr = growUint8(totalPoints);
   const edgePathId = growInt32(totalPoints);
   const edgeName = growInt32(totalPoints);
   const edgeHazards = growUint16(totalPoints);
@@ -410,6 +424,7 @@ export function buildGraph(input: readonly PathSegment[], options: BuildGraphOpt
     edgeKind.push(kindIndex.get(attrs.kind)!);
     edgeSurface.push(surfaceIndex.get(attrs.surfaceClass)!);
     edgeFlags.push((attrs.surfaceInferred ? INFERRED_BIT : 0) | (DIRECTIONS.indexOf(attrs.direction) << 1));
+    edgeSmoothnessArr.push(attrs.smoothness === null ? 0 : SMOOTHNESS_LEVELS.indexOf(attrs.smoothness) + 1);
     edgePathId.push(attrs.pathId);
     edgeName.push(attrs.name === null ? -1 : names.intern(attrs.name, attrs.name));
     edgeHazards.push(attrs.hazards.length === 0 ? 0 : hazardSets.intern(attrs.hazards.join(','), attrs.hazards));
@@ -429,6 +444,7 @@ export function buildGraph(input: readonly PathSegment[], options: BuildGraphOpt
       hazards: segment.hazards,
       surfaceClass: segment.surfaceClass,
       surfaceInferred: segment.surfaceInferred,
+      smoothness: segment.smoothness,
       direction: segment.direction,
     };
     let prevLng = quantise(line[0]!);
@@ -514,6 +530,7 @@ export function buildGraph(input: readonly PathSegment[], options: BuildGraphOpt
     edgeKind: edgeKind.finish(),
     edgeSurface: edgeSurface.finish(),
     edgeFlags: edgeFlags.finish(),
+    edgeSmoothness: edgeSmoothnessArr.finish(),
     edgePathId: edgePathId.finish(),
     edgeName: edgeName.finish(),
     edgeHazards: edgeHazards.finish(),

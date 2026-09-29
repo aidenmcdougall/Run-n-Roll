@@ -79,6 +79,7 @@ describe('buildGraph compact storage', () => {
         hazards: ['tram_line', 'parking'],
         surfaceClass: 'rough_paved',
         surfaceInferred: true,
+        smoothness: 'intermediate',
         direction: 'reverse',
       }),
     ]);
@@ -88,6 +89,7 @@ describe('buildGraph compact storage', () => {
       hazards: ['tram_line', 'parking'],
       surfaceClass: 'rough_paved',
       surfaceInferred: true,
+      smoothness: 'intermediate',
       direction: 'reverse',
     });
   });

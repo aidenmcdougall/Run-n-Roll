@@ -28,6 +28,7 @@ export function segment(
     hazards: [],
     surfaceClass: 'smooth',
     surfaceInferred: false,
+    smoothness: null,
     direction: 'both',
     bridgeGaps: true,
     ...overrides,

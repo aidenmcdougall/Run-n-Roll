@@ -1,5 +1,6 @@
-import type { EdgeKind, RouteFeature, SurfaceClass } from '../api/types';
+import type { EdgeKind, RouteFeature, SurfaceClass, SurfacePreference } from '../api/types';
 import { EDGE_KIND_STYLE, SURFACE_STYLE } from '../map/pathStyle';
+import { ScoreCards } from './ScoreCards';
 
 export function formatDistance(metres: number): string {
   return metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.round(metres)} m`;
@@ -39,7 +40,13 @@ function Breakdown({ title, rows, total }: { title: string; rows: Row[]; total: 
 
 const byLength = (a: Row, b: Row): number => b.metres - a.metres;
 
-export function RouteSummary({ route }: { route: RouteFeature }) {
+export function RouteSummary({
+  route,
+  onSurfaceChange,
+}: {
+  route: RouteFeature;
+  onSurfaceChange?: (surface: SurfacePreference) => void;
+}) {
   const { distanceM, distanceByKind, distanceBySurface, inferredSurfaceM, avoidedSurfaceM, preferences, snap } =
     route.properties;
 
@@ -58,7 +65,19 @@ export function RouteSummary({ route }: { route: RouteFeature }) {
 
   return (
     <div className="route-summary">
-      <div className="route-distance">{formatDistance(distanceM)}</div>
+      <h2>Route</h2>
+      <div className="score-card distance-card">
+        <div className="score-card-head">
+          <span aria-hidden>📏</span> Distance
+        </div>
+        <div className="score-value">{formatDistance(distanceM)}</div>
+        {kindRows[0] && (
+          <div className="score-confidence">
+            {kindRows[0].metres / distanceM >= 0.99 ? 'All' : 'Mostly'} {kindRows[0].label.toLowerCase()}
+          </div>
+        )}
+      </div>
+      <ScoreCards route={route} onSurfaceChange={onSurfaceChange} />
       {avoidedSurfaceM >= 10 && (
         <div className="alert">
           Includes {formatDistance(avoidedSurfaceM)} of{' '}
