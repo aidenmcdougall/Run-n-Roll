@@ -5,7 +5,7 @@ import { errorHandler } from '../src/http/errors.js';
 import { routesRouter } from '../src/http/routers/routes.js';
 import { buildGraph } from '../src/routing/graph.js';
 import type { NetworkState } from '../src/services/networkService.js';
-import { at, segment } from './helpers.js';
+import { at, grid, segment } from './helpers.js';
 
 // HTTP-level tests for POST /api/routes against an in-memory network, so
 // validation and error mapping are covered without a database.
@@ -51,8 +51,8 @@ interface ResponseJson {
   error?: { code: string };
 }
 
-async function post(body: unknown): Promise<{ status: number; json: ResponseJson }> {
-  const response = await fetch(`${baseUrl}/api/routes`, {
+async function post(body: unknown, path = ''): Promise<{ status: number; json: ResponseJson }> {
+  const response = await fetch(`${baseUrl}/api/routes${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -143,5 +143,71 @@ describe('POST /api/routes', () => {
     const { status, json } = await post({ start: toPoint(at(0, 0)), end: toPoint(at(900, 0)) });
     expect(status).toBe(503);
     expect(json.error?.code).toBe('NETWORK_EMPTY');
+  });
+});
+
+describe('POST /api/routes with an activity profile', () => {
+  it.each(['run', 'skate', 'run_skate'])('accepts %s', async (profile) => {
+    state = ready();
+    const { status, json } = await post({ start: toPoint(at(100, 0)), end: toPoint(at(900, 0)), profile });
+    expect(status).toBe(200);
+    expect(json.properties?.profile).toBe(profile);
+  });
+});
+
+interface CollectionJson {
+  type?: string;
+  features?: {
+    geometry: { coordinates: [number, number][] };
+    properties: { profile: string; distanceM: number; target: { distanceM: number; shape: string; distanceError: number } };
+  }[];
+  error?: { code: string };
+}
+
+describe('POST /api/routes/distance', () => {
+  const gridState = (): NetworkState => ({ status: 'ready', graph: buildGraph(grid()), builtAt: new Date(), buildMs: 0 });
+  const postDistance = async (body: unknown) => {
+    const { status, json } = await post(body, '/distance');
+    return { status, json: json as CollectionJson };
+  };
+
+  it('returns a FeatureCollection of loops near the target distance', async () => {
+    state = gridState();
+    const { status, json } = await postDistance({ start: toPoint(at(30, 10)), distanceM: 3000, shape: 'loop', profile: 'run_skate' });
+    expect(status).toBe(200);
+    expect(json.type).toBe('FeatureCollection');
+    expect(json.features?.length).toBeGreaterThan(1);
+    const [best] = json.features!;
+    expect(best!.properties.profile).toBe('run_skate');
+    expect(best!.properties.target).toMatchObject({ distanceM: 3000, shape: 'loop' });
+    expect(Math.abs(best!.properties.distanceM - 3000)).toBeLessThan(300);
+    const coords = best!.geometry.coordinates;
+    expect(coords[0]).toEqual(coords[coords.length - 1]);
+  });
+
+  it('defaults to a loop and honours the number of alternatives', async () => {
+    state = gridState();
+    const { json } = await postDistance({ start: toPoint(at(30, 10)), distanceM: 3000, alternatives: 1 });
+    expect(json.features).toHaveLength(1);
+    expect(json.features![0]!.properties.target.shape).toBe('loop');
+  });
+
+  it.each([
+    ['too short a distance', { distanceM: 100 }],
+    ['too long a distance', { distanceM: 500_000 }],
+    ['an unknown shape', { distanceM: 3000, shape: 'figure_eight' }],
+    ['a missing distance', {}],
+  ])('rejects %s with 400', async (_label, extra) => {
+    state = gridState();
+    const { status, json } = await postDistance({ start: toPoint(at(0, 0)), ...extra });
+    expect(status).toBe(400);
+    expect(json.error?.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('maps planning failures to 422', async () => {
+    state = gridState();
+    const { status, json } = await postDistance({ start: toPoint(at(0, 9000)), distanceM: 3000 });
+    expect(status).toBe(422);
+    expect(json.error?.code).toBe('START_NOT_NEAR_NETWORK');
   });
 });

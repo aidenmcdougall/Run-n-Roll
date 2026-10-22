@@ -1,12 +1,14 @@
 import { apiUrl } from '../config';
 import type {
   ApiErrorBody,
+  DistanceRoutesResponse,
   LngLatPoint,
   NetworkInfo,
   Place,
   ProfilesResponse,
   RouteFeature,
   RoutePreferences,
+  RouteShape,
 } from './types';
 
 /** An error returned by the API, carrying its machine-readable code. */
@@ -50,6 +52,19 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<RouteFeature> =>
     request('/api/routes', { method: 'POST', body: JSON.stringify({ start, end, profile, preferences }), signal }),
+  planDistanceRoutes: (
+    start: LngLatPoint,
+    distanceM: number,
+    shape: RouteShape,
+    profile: string,
+    preferences: RoutePreferences,
+    signal?: AbortSignal,
+  ): Promise<DistanceRoutesResponse> =>
+    request('/api/routes/distance', {
+      method: 'POST',
+      body: JSON.stringify({ start, distanceM, shape, profile, preferences }),
+      signal,
+    }),
   searchPlaces: async (query: string, near: LngLatPoint | null, signal?: AbortSignal): Promise<Place[]> => {
     const params = new URLSearchParams({ q: query });
     if (near) {

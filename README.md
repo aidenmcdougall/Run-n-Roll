@@ -4,7 +4,7 @@ Route planning for exploring Victoria, Australia by running, walking, cycling or
 
 The goal is for two people doing different activities (say, one running and one skating) to find a route they'll both enjoy. That means routes that prefer suitable paths and ground, not just the shortest ones.
 
-> **Status: MVP.** The official Victorian bike network is joined with OpenStreetMap footpaths, trails and streets (84,000 km in all), with ground type on every segment where it's known. It's routed with a configurable A\* router that weighs both path type and surface. Activity modes, loops and target-distance routes are planned (see [Roadmap](#roadmap)).
+> **Status: MVP.** The official Victorian bike network is joined with OpenStreetMap footpaths, trails and streets (84,000 km in all), with ground type on every segment where it's known. It's routed with a configurable A\* router that weighs both path type and surface, for running, skating or both at once. Give it a start and a distance and it plans a loop or a one-way route of about that length.
 
 ---
 
@@ -44,7 +44,7 @@ npm run osm:build            # merge OSM into the network + add surfaces (~8 min
 npm run dev                  # API on :3001, web app on http://localhost:5173
 ```
 
-Open <http://localhost:5173>. Set the start (A) and destination (B) by **typing an address or place** into either row, or by clicking the map: the first click sets A, later clicks set B. To move one pin, press its **⌖** button and click the map, or just drag the marker. Dropped pins are labelled with the nearest street. Under **Preferences**, choose a route style, a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Each route shows a **skate score** and a **run score**; tap one to see what's behind it. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
+Open <http://localhost:5173>. In **Distance** mode, set a start (search, click the map, or **Start from my location**), enter a distance, and choose **Loop** or **One way**. You get up to three routes of about that length; use **‹ ›** to flick between them. In **A → B** mode, set the start (A) and destination (B) by **typing an address or place** into either row, or by clicking the map: the first click sets A, later clicks set B. To move one pin, press its **⌖** button and click the map, or just drag the marker. Dropped pins are labelled with the nearest street. Under **Preferences**, choose an activity (**Run**, **Skate** or **Both**), a surface (Any / No gravel / Smooth), and whether to avoid steps or busy roads; your choice is remembered. Each route shows a **skate score** and a **run score**; tap one to see what's behind it. Use **Path type / Surface** to recolour the network by ground type. Zoom to street level to see footpaths and streets.
 
 To refresh everything later: `npm run data:refresh`, then restart the API.
 
@@ -226,9 +226,50 @@ On 400 random inner-Melbourne trips:
 
 Snapping made a big difference: with penalties alone, "No gravel" left 10.1 km of loose ground. Most of the remainder is trips that start or end deep inside parks with only unsealed paths.
 
+### Activity profiles ([`routing/activities.ts`](backend/src/routing/activities.ts))
+
+The `run`, `skate` and `run_skate` profiles **route by the same tables the scores rate with** (below), so the router picks what the scores reward. A suitability factor in [0, 1] becomes a cost multiplier of 1 / factor: a stretch half as good to skate costs twice as much per metre. Factors of 0 (gravel or steps on skates) are floored at 0.05, a ×20 penalty rather than a ban, so a route is still found when there's no way round, and the score then reports the walking.
+
+| | Running | Skating | Running + skating |
+| --- | --- | --- | --- |
+| Surfaces | compacted ×1, sealed ×1.11, gravel ×1.25 | smooth ×1, pavers ×2.9, compacted ×10, gravel/dirt ×20 | worse of the two |
+| Path types | paths/trails ×1, footpaths ×1.11, painted lanes ×1.67, busy roads ×2.2 | paths ×1, footpaths ×1.25, busy roads ×4, steps ×20 | worse of the two |
+| Hazards | merging traffic ×1.18 | tram tracks ×2.5 | worse of the two |
+
+**Running + skating** takes the worse factor of each activity per table entry, so the route suits both people. Skating also uses OSM `smoothness` where it's tagged: the ground costs the *worse* of its smoothness and surface multipliers, so broken asphalt is avoided but a "good" smoothness tag doesn't make gravel skateable. Surface preferences layer on top as usual. A surface costing ≥ 3× the profile's cheapest one counts as *avoided*: route ends snap clear of it, and the response reports any metres that remain (so skating avoids gravel at the ends without needing "Smooth").
+
+`prefer_paths` (the API default) and `shortest` are still available through the API.
+
+### Distance routes and loops ([`routing/distanceRoutes.ts`](backend/src/routing/distanceRoutes.ts))
+
+"A 5 km loop from here" has no destination to search towards, so the planner makes some. For each of 8 compass bearings:
+
+1. **Place waypoints.** For a loop, two waypoints form an equilateral triangle with the start (start → W1 → W2 → start, at bearing ± 30°). For one way, one waypoint lies straight out along the bearing. Loop waypoints snap only to edges that aren't dead ends, which would force an out-and-back, and never to avoided surfaces.
+2. **Route each leg** with the normal A\* router under the activity profile. Edges already used cost **×3** on later legs, so a loop comes home a different way where it reasonably can.
+3. **Correct the distance.** Paths wind, so the first guess assumes the network is 1.3× the straight-line distance. The planner then measures the real ratio for that bearing and rescales, up to 3 attempts, until the route is within **5%** of the target.
+
+Candidates are ranked by:
+
+```
+rank = cost per metre (relative to an ideal metre)
+     × (1 + 2 × share of the route travelled twice)
+     × (1 + 4 × how far beyond 5% the distance misses)
+```
+
+The best 3 **distinct** routes are returned (an alternative may share at most half its length with a better one). Routes that miss the target by more than 30% are dropped, so a network too small for the distance gives `NO_ROUTE` rather than a useless route.
+
+Typical results on the real network:
+
+| Request | Best routes | Time |
+| --- | --- | --- |
+| Southbank, 5 km loop, both | 4.93, 5.05, 5.05 km | 0.3 s |
+| St Kilda, 10 km loop, skate | 9.76, 9.69, 10.15 km (skate 77–81) | 0.1 s |
+| Brunswick, 5 km one way, both | 4.89, 5.16, 4.99 km (skate 94–97) | 0.07 s |
+| Southbank, 42 km loop, run | 42.34, 41.73, 43.54 km | 0.6 s |
+
 ### Skate and run scores ([`routing/scoring.ts`](backend/src/routing/scoring.ts))
 
-Every planned route is rated 0–100 for **skating** and for **running**. Scores describe a route; they don't change which route is chosen. That's the job of preferences (and, later, activity profiles).
+Every planned route is rated 0–100 for **skating** and for **running**. Scores describe a route; they don't change which route is chosen. That's the job of the profile and preferences (see [Activity profiles](#activity-profiles-routingactivitiests), which route by these same tables).
 
 The planner reports the route as uniform *stretches* (consecutive edges with the same kind, surface, smoothness and hazards). Each stretch gets a suitability in [0, 1] per activity:
 
@@ -271,6 +312,7 @@ All tables are data, returned by `GET /api/routes/profiles` under `scoring`, and
 | `GET` | `/api/tiles/paths/{z}/{x}/{y}.pbf` | Vector tile, layer `paths` (z ≥ 8). Properties include `source`, `infra_category`, `surface`, `surface_class`, `surface_inferred`, `smoothness`, `width_m`, `hazards`. |
 | `GET` | `/api/routes/profiles` | Routing profiles and their weights |
 | `POST` | `/api/routes` | Plan a route |
+| `POST` | `/api/routes/distance` | Plan loops or one-way routes of a target distance |
 | `GET` | `/api/geocode/search?q=&lat=&lng=` | Address and place search in Victoria, optionally biased towards a point |
 | `GET` | `/api/geocode/reverse?lat=&lng=` | Nearest street to a point (labels dropped pins) |
 
@@ -296,6 +338,22 @@ This responds with a GeoJSON `Feature<LineString>`. Its `properties` hold:
 - `scores.skate` and `scores.run`: `{ score, rating, confidence, notes[] }`
 - `snap` distances
 
+```http
+POST /api/routes/distance
+Content-Type: application/json
+
+{ "start": { "lng": 144.9646, "lat": -37.8207 },
+  "distanceM": 5000,
+  "shape": "loop",
+  "profile": "run_skate",
+  "preferences": { "surface": "any" },
+  "alternatives": 3 }
+```
+
+`distanceM` (500–50,000) is required. `shape` (`loop` | `one_way`) defaults to `loop`, and `alternatives` (1–5) defaults to 3. This responds with a GeoJSON `FeatureCollection` of routes, best first. Each feature has the same `properties` as above, plus `target`: `{ distanceM, shape, bearingDeg, distanceError, repeatedM }`.
+
+`profile` is one of `run`, `skate`, `run_skate`, `prefer_paths` or `shortest`, on either endpoint.
+
 Errors share one shape, `{ "error": { "code", "message", "details?" } }`:
 
 | Status | Codes |
@@ -320,7 +378,7 @@ OSM house-number coverage in Victoria is incomplete, so a specific street addres
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | API (tsx watch) and web app (Vite) together |
-| `npm test` | Backend unit + HTTP tests (vitest, 165 tests) |
+| `npm test` | Backend unit + HTTP tests (vitest, 199 tests) |
 | `npm run typecheck` | Strict `tsc` for both packages |
 | `npm run build` | Compile the API to `backend/dist`, bundle the web app to `frontend/dist` |
 | `npm run db:up` / `db:down` | Start or stop the PostGIS container (data persists in a Docker volume) |
@@ -333,15 +391,16 @@ Configuration comes from the single repo-root `.env`, shared by Docker Compose, 
 
 - **Snapping range:** 87.5% of random inner-Melbourne click pairs now route (up from 45% with DTP data alone), and none fail for lack of connection. The rest are clicks more than 500 m from any path, which is mostly water in the test area.
 - **Coverage** follows the DTP regions: Melbourne, Geelong, Ballarat, Bendigo and nearby towns. OSM is imported only within 1 km of those clusters.
-- **Surface gaps:** about 3% of routed distance still has unknown ground, mostly untagged off-road paths. OSM `smoothness` is stored and shown but isn't weighted yet; it's meant for the skate profile.
+- **Surface gaps:** about 3% of routed distance still has unknown ground, mostly untagged off-road paths. OSM `smoothness` is weighted only by the skate profiles.
+- **Distance routes** start from fixed compass bearings, so asking again from the same place gives the same three routes. Beside water or at the edge of the network, fewer bearings work, so there are fewer alternatives.
 - **One-way lanes are ignored** by both profiles (`respectOneWay: false`, which suits running and walking); the support is there for a cycling mode.
 - **Load time:** the API takes about 14 s to build the graph at startup. Routing returns `503 NETWORK_LOADING` until then.
 - **Apple Silicon:** the official `postgis/postgis` image is amd64-only, so it runs under emulation. `osm:build` takes about 8 minutes, and low-zoom tiles take about 0.5 s to generate (cached for an hour).
 
 ## Roadmap
 
-1. **Activity profiles:** running, walking, cycling and skating as `RoutingProfile` data, built on the preference layer. A skate profile would *route* by the same factors the skate score *rates* with. **Couples mode** would combine two people's profiles and preferences (e.g. the worse multiplier of the two per edge).
-2. **Distance-targeted routes and loops:** "10 km loop from here", and 5/10/15/20 km suggestions.
+1. ~~**Activity profiles**~~ for running and skating, plus running + skating together, are done. Next: walking and cycling profiles, and separate preferences per person.
+2. ~~**Distance-targeted routes and loops**~~ are done. Next: out-and-back routes, shuffling for fresh alternatives, and exporting a route to a watch.
 3. **Elevation:** slope costs from a DEM (e.g. Vicmap Elevation) and steep-hill avoidance.
 4. **Official addresses:** Vicmap Address for complete house-number search.
 5. **More surface data:** Vicmap sealed/unsealed for rural roads, and City of Melbourne surface condition for the CBD.

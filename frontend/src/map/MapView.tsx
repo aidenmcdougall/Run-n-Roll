@@ -52,6 +52,8 @@ interface MapViewProps {
   focus: FocusRequest | null;
   start: LngLatPoint | null;
   end: LngLatPoint | null;
+  /** Whether the end marker can be dragged (not when it just marks where a route finishes). */
+  endDraggable?: boolean;
   route: RouteFeature | null;
   onMapClick: (point: LngLatPoint) => void;
   onWaypointMoved: (which: Waypoint, point: LngLatPoint) => void;
@@ -70,7 +72,18 @@ function createMarker(className: string, label: string): Marker {
   return new Marker({ element: el, draggable: true });
 }
 
-export function MapView({ colorMode, picking, focus, start, end, route, onMapClick, onWaypointMoved, onHoverPath }: MapViewProps) {
+export function MapView({
+  colorMode,
+  picking,
+  focus,
+  start,
+  end,
+  endDraggable = true,
+  route,
+  onMapClick,
+  onWaypointMoved,
+  onHoverPath,
+}: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Record<Waypoint, Marker | null>>({ start: null, end: null });
@@ -179,7 +192,7 @@ export function MapView({ colorMode, picking, focus, start, end, route, onMapCli
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const sync = (which: Waypoint, point: LngLatPoint | null, className: string, label: string) => {
+    const sync = (which: Waypoint, point: LngLatPoint | null, className: string, label: string, draggable: boolean) => {
       let marker = markersRef.current[which];
       if (!point) {
         marker?.remove();
@@ -197,10 +210,12 @@ export function MapView({ colorMode, picking, focus, start, end, route, onMapCli
       } else {
         marker.setLngLat(point);
       }
+      marker.setDraggable(draggable);
+      marker.getElement().classList.toggle('fixed', !draggable);
     };
-    sync('start', start, 'waypoint-start', 'A');
-    sync('end', end, 'waypoint-end', 'B');
-  }, [start, end]);
+    sync('start', start, 'waypoint-start', 'A', true);
+    sync('end', end, 'waypoint-end', 'B', endDraggable);
+  }, [start, end, endDraggable]);
 
   // --- crosshair while choosing a point on the map ----------------------------------
   useEffect(() => {

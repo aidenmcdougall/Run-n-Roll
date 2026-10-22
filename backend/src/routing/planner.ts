@@ -1,7 +1,7 @@
 import { SURFACE_CLASSES, type Smoothness, type SurfaceClass } from '../domain/surface.js';
 import { aStar, type SearchSpace } from './astar.js';
 import { cumulativeLengths, haversineXY, slicePolyline, type LngLat } from './geo.js';
-import { edgeCoordinates, edgeDirection, getEdge, type GraphEdge, type RoutingGraph } from './graph.js';
+import { edgeCoordinates, edgeDirection, edgeSmoothness, getEdge, type GraphEdge, type RoutingGraph } from './graph.js';
 import { EDGE_KINDS, edgeCost, minCostPerMeter, type CostableEdge, type EdgeKind, type RoutingProfile } from './weights.js';
 
 export const DEFAULT_MAX_SNAP_DISTANCE_M = 500;
@@ -42,6 +42,17 @@ export interface RouteStretch {
   readonly lengthM: number;
 }
 
+/**
+ * A stretch of one edge travelled by a route, from `fromM` to `toM` along the
+ * edge's geometry (`fromM > toM` means travelled backwards). Whole edges run
+ * from 0 to the edge's length.
+ */
+export interface RoutePiece {
+  readonly edgeId: number;
+  readonly fromM: number;
+  readonly toM: number;
+}
+
 export interface RoutePlan {
   readonly coordinates: LngLat[];
   readonly distanceM: number;
@@ -57,6 +68,8 @@ export interface RoutePlan {
   readonly inferredSurfaceM: number;
   /** The route as uniform stretches, in travel order. */
   readonly stretches: RouteStretch[];
+  /** The edges travelled, in order. */
+  readonly pieces: RoutePiece[];
   readonly start: SnappedPoint;
   readonly end: SnappedPoint;
   readonly nodesSettled: number;
@@ -169,7 +182,7 @@ const REF_START_TO_END = -5; // S → T along a single shared edge
 export const MAX_CACHED_PROFILES = 6;
 const costCache = new WeakMap<RoutingGraph, Map<string, Float64Array>>();
 
-function edgeCosts(graph: RoutingGraph, profile: RoutingProfile): Float64Array {
+export function edgeCosts(graph: RoutingGraph, profile: RoutingProfile): Float64Array {
   let byProfile = costCache.get(graph);
   if (!byProfile) costCache.set(graph, (byProfile = new Map()));
   const cached = byProfile.get(profile.id);
@@ -188,12 +201,14 @@ function edgeCosts(graph: RoutingGraph, profile: RoutingProfile): Float64Array {
     kind: 'unknown',
     hazards: [],
     surfaceClass: 'unknown',
+    smoothness: null,
   };
   for (let e = 0; e < graph.edgeCount; e++) {
     view.lengthM = graph.edgeLength[e]!;
     view.kind = EDGE_KINDS[graph.edgeKind[e]!]!;
     view.hazards = graph.hazardSets[graph.edgeHazards[e]!]!;
     view.surfaceClass = SURFACE_CLASSES[graph.edgeSurface[e]!]!;
+    view.smoothness = edgeSmoothness(graph, e);
     costs[e] = edgeCost(view, profile);
   }
   byProfile.set(profile.id, costs);
@@ -223,7 +238,7 @@ function canTraverse(graph: RoutingGraph, edge: number, forward: boolean, profil
  * snapping range — so "start 90 m away on a sealed path" beats "cover 900 m
  * of dirt first".
  */
-function snapPreferring(
+export function snapPreferring(
   graph: RoutingGraph,
   point: LngLat,
   maxDistanceM: number,
@@ -237,13 +252,9 @@ function snapPreferring(
 }
 
 /**
- * Plans the cheapest route between two arbitrary points under `profile`.
- *
- * Both points are snapped to the closest point on the network, which is
- * usually part-way along an edge. Rather than rounding to the nearest
- * junction (which could be hundreds of metres away), we add a virtual start
- * node S and end node T joined to the ends of their edges by partial-cost
- * arcs, then run A* from S to T.
+ * Plans the cheapest route between two arbitrary points under `profile`:
+ * snaps both to the network (see `snapPreferring` and `chooseConnectedSnap`),
+ * then routes between the snapped points (see `routeBetween`).
  */
 export function planRoute(
   graph: RoutingGraph,
@@ -271,13 +282,55 @@ export function planRoute(
     };
   }
   const { start, end } = endpoints;
+  const leg = routeBetween(graph, start, end, profile);
+  if (!leg) {
+    return { ok: false, code: 'NO_ROUTE', message: 'No route could be found between these points.' };
+  }
+  return { ok: true, route: assemblePlan(graph, leg.pieces, { cost: leg.cost, start, end, nodesSettled: leg.settled }) };
+}
+
+export interface LegOptions {
+  /** Edges that cost `penaltyFactor` times more, e.g. ones a loop has already used. */
+  readonly penalisedEdges?: ReadonlySet<number>;
+  readonly penaltyFactor?: number;
+}
+
+export interface Leg {
+  readonly pieces: RoutePiece[];
+  /** Cost under the profile, including any penalties from `LegOptions`. */
+  readonly cost: number;
+  readonly settled: number;
+}
+
+/**
+ * The cheapest route between two points already on the network, or null if
+ * there is none.
+ *
+ * Both points are usually part-way along an edge. Rather than rounding to the
+ * nearest junction (which could be hundreds of metres away), we add a virtual
+ * start node S and end node T joined to the ends of their edges by
+ * partial-cost arcs, then run A* from S to T.
+ */
+export function routeBetween(
+  graph: RoutingGraph,
+  start: SnappedPoint,
+  end: SnappedPoint,
+  profile: RoutingProfile,
+  options: LegOptions = {},
+): Leg | null {
   const startEdge = getEdge(graph, start.edgeId);
   const endEdge = getEdge(graph, end.edgeId);
 
-  const costs = edgeCosts(graph, profile);
+  const baseCosts = edgeCosts(graph, profile);
+  const penalised = options.penalisedEdges;
+  const penaltyFactor = options.penaltyFactor ?? 1;
+  // Penalties are >= 1, so the A* heuristic below stays admissible.
+  const cost = penalised && penalised.size > 0 && penaltyFactor !== 1
+    ? (edge: number) => (penalised.has(edge) ? baseCosts[edge]! * penaltyFactor : baseCosts[edge]!)
+    : (edge: number) => baseCosts[edge]!;
   const S = graph.nodeCount;
   const T = S + 1;
-  const costPerM = (edge: GraphEdge): number => (edge.lengthM > 0 ? costs[edge.id]! / edge.lengthM : 0);
+  const costPerM = (edge: GraphEdge): number => (edge.lengthM > 0 ? cost(edge.id) / edge.lengthM : 0);
   const startCostPerM = costPerM(startEdge);
   const endCostPerM = costPerM(endEdge);
   const heuristicScale = minCostPerMeter(profile);
@@ -309,7 +362,7 @@ export function planRoute(
         const edge = adjEdges[i]!;
         const forward = edgeFrom[edge] === node;
         if (!canTraverse(graph, edge, forward, profile)) continue;
-        visit(forward ? edgeTo[edge]! : edgeFrom[edge]!, costs[edge]!, edge);
+        visit(forward ? edgeTo[edge]! : edgeFrom[edge]!, cost(edge), edge);
       }
       if (node === endEdge.from && canTraverse(graph, endEdge.id, true, profile)) {
         visit(T, end.alongM * endCostPerM, REF_FROM_TO_END);
@@ -321,11 +374,46 @@ export function planRoute(
   };
 
   const result = aStar(space, S, T);
-  if (!result) {
-    return { ok: false, code: 'NO_ROUTE', message: 'No route could be found between these points.' };
-  }
+  if (!result) return null;
 
-  // Rebuild geometry and per-leg stats from the arcs taken.
+  const pieces = result.refs.map((ref, i): RoutePiece => {
+    switch (ref) {
+      case REF_START_TO_FROM:
+        return { edgeId: startEdge.id, fromM: start.alongM, toM: 0 };
+      case REF_START_TO_TO:
+        return { edgeId: startEdge.id, fromM: start.alongM, toM: startEdge.lengthM };
+      case REF_FROM_TO_END:
+        return { edgeId: endEdge.id, fromM: 0, toM: end.alongM };
+      case REF_TO_TO_END:
+        return { edgeId: endEdge.id, fromM: endEdge.lengthM, toM: end.alongM };
+      case REF_START_TO_END:
+        return { edgeId: startEdge.id, fromM: start.alongM, toM: end.alongM };
+      default: {
+        const lengthM = graph.edgeLength[ref]!;
+        return edgeFrom[ref] === result.nodes[i] ? { edgeId: ref, fromM: 0, toM: lengthM } : { edgeId: ref, fromM: lengthM, toM: 0 };
+      }
+    }
+  });
+  return { pieces, cost: result.cost, settled: result.settled };
+}
+
+/** Profile cost of travelling some pieces (without leg penalties). */
+export function piecesCost(graph: RoutingGraph, pieces: readonly RoutePiece[], profile: RoutingProfile): number {
+  const costs = edgeCosts(graph, profile);
+  let total = 0;
+  for (const { edgeId, fromM, toM } of pieces) {
+    const lengthM = graph.edgeLength[edgeId]!;
+    if (lengthM > 0) total += (costs[edgeId]! / lengthM) * Math.abs(toM - fromM);
+  }
+  return total;
+}
+
+/** Builds the route's geometry and per-kind, per-surface and per-stretch stats from the pieces travelled. */
+export function assemblePlan(
+  graph: RoutingGraph,
+  pieces: readonly RoutePiece[],
+  meta: { cost: number; start: SnappedPoint; end: SnappedPoint; nodesSettled: number },
+): RoutePlan {
   const coordinates: LngLat[] = [];
   const legs: RouteLeg[] = [];
   const distanceByKind: Partial<Record<EdgeKind, number>> = {};
@@ -370,45 +458,28 @@ export function planRoute(
     }
   };
 
-  const partial = (edge: GraphEdge, fromM: number, toM: number): void => {
-    append(edge, slicePolyline(edge.coordinates, cumulativeLengths(edge.coordinates), fromM, toM), Math.abs(toM - fromM));
-  };
-
-  result.refs.forEach((ref, i) => {
-    const fromNode = result.nodes[i]!;
-    switch (ref) {
-      case REF_START_TO_FROM:
-        return partial(startEdge, start.alongM, 0);
-      case REF_START_TO_TO:
-        return partial(startEdge, start.alongM, startEdge.lengthM);
-      case REF_FROM_TO_END:
-        return partial(endEdge, 0, end.alongM);
-      case REF_TO_TO_END:
-        return partial(endEdge, endEdge.lengthM, end.alongM);
-      case REF_START_TO_END:
-        return partial(startEdge, start.alongM, end.alongM);
-      default: {
-        const edge = getEdge(graph, ref);
-        const piece = edge.from === fromNode ? edge.coordinates : [...edge.coordinates].reverse();
-        return append(edge, piece, edge.lengthM);
-      }
+  for (const { edgeId, fromM, toM } of pieces) {
+    const edge = getEdge(graph, edgeId);
+    const whole = Math.min(fromM, toM) === 0 && Math.max(fromM, toM) === edge.lengthM;
+    if (whole && edge.lengthM > 0) {
+      append(edge, fromM === 0 ? edge.coordinates : [...edge.coordinates].reverse(), edge.lengthM);
+    } else {
+      append(edge, slicePolyline(edge.coordinates, cumulativeLengths(edge.coordinates), fromM, toM), Math.abs(toM - fromM));
     }
-  });
+  }
 
   return {
-    ok: true,
-    route: {
-      coordinates,
-      distanceM,
-      cost: result.cost,
-      legs,
-      distanceByKind,
-      distanceBySurface,
-      inferredSurfaceM,
-      stretches,
-      start,
-      end,
-      nodesSettled: result.settled,
-    },
+    coordinates,
+    distanceM,
+    cost: meta.cost,
+    legs,
+    distanceByKind,
+    distanceBySurface,
+    inferredSurfaceM,
+    stretches,
+    pieces: [...pieces],
+    start: meta.start,
+    end: meta.end,
+    nodesSettled: meta.nodesSettled,
   };
 }

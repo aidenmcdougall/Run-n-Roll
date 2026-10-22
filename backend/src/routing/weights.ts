@@ -1,5 +1,5 @@
 import { INFRA_CATEGORIES, type InfraCategory } from '../domain/infrastructure.js';
-import type { SurfaceClass } from '../domain/surface.js';
+import type { Smoothness, SurfaceClass } from '../domain/surface.js';
 
 /**
  * Edge kinds the router can traverse: every infrastructure category from the
@@ -31,6 +31,13 @@ export interface RoutingProfile {
   readonly hazardMultipliers: Readonly<Record<string, number>>;
   /** Keyed by normalised surface class (see domain/surface.ts). */
   readonly surfaceMultipliers: Readonly<Record<SurfaceClass, number>>;
+  /**
+   * Optional, keyed by OSM smoothness. On edges with tagged smoothness the
+   * ground costs the *worse* of this and the surface multiplier: a smoothness
+   * tag can reveal that asphalt is broken, but "good" smoothness on gravel
+   * doesn't make it skateable (and surface preferences keep applying).
+   */
+  readonly smoothnessMultipliers?: Readonly<Partial<Record<Smoothness, number>>>;
   /** Whether to honour one-way bike lanes (relevant for cycling, not running). */
   readonly respectOneWay: boolean;
 }
@@ -41,6 +48,7 @@ export interface CostableEdge {
   readonly kind: EdgeKind;
   readonly hazards: readonly string[];
   readonly surfaceClass: SurfaceClass;
+  readonly smoothness?: Smoothness | null;
 }
 
 export function edgeCost(edge: CostableEdge, profile: RoutingProfile): number {
@@ -48,7 +56,9 @@ export function edgeCost(edge: CostableEdge, profile: RoutingProfile): number {
   for (const hazard of edge.hazards) {
     multiplier *= profile.hazardMultipliers[hazard] ?? 1;
   }
-  multiplier *= profile.surfaceMultipliers[edge.surfaceClass];
+  const surface = profile.surfaceMultipliers[edge.surfaceClass];
+  const smoothness = edge.smoothness ? profile.smoothnessMultipliers?.[edge.smoothness] : undefined;
+  multiplier *= smoothness === undefined ? surface : Math.max(surface, smoothness);
   return edge.lengthM * multiplier;
 }
 
@@ -73,6 +83,7 @@ export function validateProfile(profile: RoutingProfile): void {
     ...Object.values(profile.kindMultipliers),
     ...Object.values(profile.hazardMultipliers),
     ...Object.values(profile.surfaceMultipliers),
+    ...Object.values(profile.smoothnessMultipliers ?? {}),
   ];
   if (all.some((value) => !Number.isFinite(value) || value <= 0)) {
     throw new Error(`Routing profile "${profile.id}" has a non-positive or non-finite multiplier`);
@@ -167,12 +178,3 @@ export const PREFER_PATHS_PROFILE: RoutingProfile = {
   },
   respectOneWay: false,
 };
-
-export const ROUTING_PROFILES: Readonly<Record<string, RoutingProfile>> = {
-  [PREFER_PATHS_PROFILE.id]: PREFER_PATHS_PROFILE,
-  [SHORTEST_PROFILE.id]: SHORTEST_PROFILE,
-};
-
-export const DEFAULT_PROFILE_ID = PREFER_PATHS_PROFILE.id;
-
-for (const profile of Object.values(ROUTING_PROFILES)) validateProfile(profile);

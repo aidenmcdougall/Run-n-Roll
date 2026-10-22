@@ -44,10 +44,18 @@ export const SURFACE_PENALTIES: Readonly<Record<SurfacePreference, Multipliers<S
 export const STEPS_PENALTY: Multipliers<EdgeKind> = { steps: 20 };
 export const BUSY_ROAD_PENALTY: Multipliers<EdgeKind> = { busy_road: 3, road: 1.5 };
 
-/** Surfaces the user asked to avoid; used to warn when a route still includes them. */
-export function avoidedSurfaces(preferences: RoutePreferences): SurfaceClass[] {
-  return (Object.entries(SURFACE_PENALTIES[preferences.surface]) as [SurfaceClass, number][])
-    .filter(([surface, factor]) => factor >= 3 && surface !== 'unknown')
+/** A surface costing at least this many times the profile's cheapest one counts as avoided. */
+export const AVOIDED_SURFACE_RATIO = 3;
+
+/**
+ * Surfaces the effective profile steers away from: those set by a surface
+ * preference, or ruled out by an activity (gravel on skates). Used to snap
+ * clear of them and to warn when a route still includes them.
+ */
+export function avoidedSurfaces(profile: RoutingProfile): SurfaceClass[] {
+  const cheapest = Math.min(...Object.values(profile.surfaceMultipliers));
+  return (Object.entries(profile.surfaceMultipliers) as [SurfaceClass, number][])
+    .filter(([surface, multiplier]) => multiplier >= cheapest * AVOIDED_SURFACE_RATIO && surface !== 'unknown')
     .map(([surface]) => surface);
 }
 

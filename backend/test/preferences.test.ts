@@ -77,9 +77,10 @@ describe('applyPreferences', () => {
 
 describe('avoidedSurfaces', () => {
   it('lists the surfaces a preference steers away from', () => {
-    expect(avoidedSurfaces(prefs({}))).toEqual([]);
-    expect(avoidedSurfaces(prefs({ surface: 'avoid_loose' })).sort()).toEqual(['compacted', 'gravel', 'unpaved']);
-    expect(avoidedSurfaces(prefs({ surface: 'smooth_only' }))).toContain('rough_paved');
+    const avoided = (p: Partial<RoutePreferences>) => avoidedSurfaces(applyPreferences(PREFER_PATHS_PROFILE, prefs(p)));
+    expect(avoided({})).toEqual([]);
+    expect(avoided({ surface: 'avoid_loose' }).sort()).toEqual(['compacted', 'gravel', 'unpaved']);
+    expect(avoided({ surface: 'smooth_only' })).toContain('rough_paved');
   });
 
   it('keys preferences deterministically', () => {

@@ -18,6 +18,19 @@ export function haversineXY(lng1: number, lat1: number, lng2: number, lat2: numb
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/** The point `distanceM` from `origin` along a great circle at `bearingDeg` (clockwise from north). */
+export function destinationPoint(origin: LngLat, bearingDeg: number, distanceM: number): LngLat {
+  const angular = distanceM / EARTH_RADIUS_M;
+  const bearing = bearingDeg * DEG_TO_RAD;
+  const lat1 = origin[1] * DEG_TO_RAD;
+  const lng1 = origin[0] * DEG_TO_RAD;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angular) + Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing));
+  const lng2 =
+    lng1 +
+    Math.atan2(Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1), Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2));
+  return [lng2 / DEG_TO_RAD, lat2 / DEG_TO_RAD];
+}
+
 /** Cumulative distance (m) at each vertex of a polyline; result[0] === 0. */
 export function cumulativeLengths(coords: readonly LngLat[]): number[] {
   const out = new Array<number>(coords.length);

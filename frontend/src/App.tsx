@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api/client';
-import type { LngLatPoint, NetworkInfo, Place, RoutingProfile } from './api/types';
+import type { Activity, DistanceRouteFeature, LngLatPoint, NetworkInfo, Place, RouteShape, RoutingProfile } from './api/types';
+import { useDistanceRoutes } from './api/useDistanceRoutes';
 import { useRoute } from './api/useRoute';
+import { DistanceControls, parseDistanceKm } from './components/DistanceControls';
 import { Legend } from './components/Legend';
 import { PlaceField } from './components/PlaceField';
 import { Preferences } from './components/Preferences';
-import { RouteSummary } from './components/RouteSummary';
+import { formatDistance, RouteSummary } from './components/RouteSummary';
 import { MapView, type FocusRequest, type HoveredPath, type Waypoint } from './map/MapView';
 import { EDGE_KIND_STYLE, SURFACE_STYLE, type ColorMode } from './map/pathStyle';
 import type { EdgeKind, RoutePreferences, SurfaceClass } from './api/types';
@@ -40,6 +42,43 @@ function loadPreferences(): RoutePreferences {
   }
 }
 
+/** Plan a route of a target distance from a start, or between two points. */
+type PlanMode = 'distance' | 'a_to_b';
+
+interface PlanSettings {
+  mode: PlanMode;
+  activity: Activity;
+  /** As typed in the distance field, in km. */
+  distanceText: string;
+  shape: RouteShape;
+}
+
+const DEFAULT_PLAN: PlanSettings = { mode: 'distance', activity: 'run_skate', distanceText: '5', shape: 'loop' };
+const PLAN_STORAGE_KEY = 'runnroll.plan';
+
+/** Restores saved plan settings, falling back per field when storage is unavailable or stale. */
+function loadPlan(): PlanSettings {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PLAN_STORAGE_KEY) ?? 'null') as Partial<PlanSettings> | null;
+    if (!saved) return DEFAULT_PLAN;
+    const oneOf = <T extends string>(value: unknown, options: readonly T[], fallback: T): T =>
+      options.includes(value as T) ? (value as T) : fallback;
+    return {
+      mode: oneOf(saved.mode, ['distance', 'a_to_b'], DEFAULT_PLAN.mode),
+      activity: oneOf(saved.activity, ['run', 'skate', 'run_skate'], DEFAULT_PLAN.activity),
+      distanceText: typeof saved.distanceText === 'string' ? saved.distanceText : DEFAULT_PLAN.distanceText,
+      shape: oneOf(saved.shape, ['loop', 'one_way'], DEFAULT_PLAN.shape),
+    };
+  } catch {
+    return DEFAULT_PLAN;
+  }
+}
+
+const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+const compassName = (bearingDeg: number): string => COMPASS[Math.round(bearingDeg / 45) % 8]!;
+
+const toPoint = ([lng, lat]: readonly [number, number]): LngLatPoint => ({ lng, lat });
+
 /** Short label for a reverse-geocoded pin, e.g. "Near Barassi Way, Jolimont". */
 function nearLabel(place: Place): string {
   const suburb = place.detail?.split(', ').pop()?.replace(/\s*\d{4}$/, '');
@@ -57,7 +96,10 @@ export default function App() {
   // Guards against a slow reverse lookup labelling a pin that has since moved.
   const labelRequest = useRef<Record<Waypoint, number>>({ start: 0, end: 0 });
   const [profiles, setProfiles] = useState<RoutingProfile[]>([]);
-  const [profileId, setProfileId] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PlanSettings>(loadPlan);
+  const updatePlan = (changes: Partial<PlanSettings>) => setPlan((current) => ({ ...current, ...changes }));
+  const { mode, activity, shape } = plan;
+  const distanceKm = parseDistanceKm(plan.distanceText);
   const [network, setNetwork] = useState<NetworkInfo | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<HoveredPath | null>(null);
@@ -73,15 +115,46 @@ export default function App() {
     }
   }, [preferences]);
 
-  const routeState = useRoute(start, end, profileId, preferences);
+  useEffect(() => {
+    try {
+      localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(plan));
+    } catch {
+      // Storage unavailable: settings just won't persist.
+    }
+  }, [plan]);
+
+  // Only the active mode plans anything.
+  const routeState = useRoute(mode === 'a_to_b' ? start : null, end, activity, preferences);
+  const distanceState = useDistanceRoutes(
+    mode === 'distance' ? start : null,
+    distanceKm === null ? null : distanceKm * 1000,
+    shape,
+    activity,
+    preferences,
+  );
+  const distanceRoutes = distanceState.status === 'success' ? distanceState.routes : [];
+  // The chosen alternative belongs to one set of results; new results start at the best.
+  const [picked, setPicked] = useState<{ routes: DistanceRouteFeature[] | null; index: number }>({ routes: null, index: 0 });
+  const routeIndex = picked.routes === distanceRoutes ? picked.index : 0;
+  const stepRoute = (step: number) =>
+    setPicked({ routes: distanceRoutes, index: (routeIndex + step + distanceRoutes.length) % distanceRoutes.length });
+  const distanceRoute: DistanceRouteFeature | null = distanceRoutes[routeIndex] ?? null;
+  const mapRoute = mode === 'distance' ? distanceRoute : routeState.status === 'success' ? routeState.route : null;
+  // A one-way route's finish is wherever it ends up; mark it, but it isn't draggable.
+  const finish =
+    distanceRoute && distanceRoute.properties.target.shape === 'one_way'
+      ? toPoint(distanceRoute.geometry.coordinates[distanceRoute.geometry.coordinates.length - 1]!)
+      : null;
+
+  // Bring each new distance route into view: it can head well off screen.
+  useEffect(() => {
+    if (distanceRoute) setFocus({ points: distanceRoute.geometry.coordinates.map(toPoint), id: Date.now() });
+  }, [distanceRoute]);
 
   useEffect(() => {
     api
       .getProfiles()
-      .then(({ profiles: list, defaultProfile }) => {
-        setProfiles(list);
-        setProfileId(defaultProfile);
-      })
+      .then(({ profiles: list }) => setProfiles(list))
       .catch((error: Error) => setApiError(error.message));
   }, []);
 
@@ -119,15 +192,16 @@ export default function App() {
       .catch(() => undefined); // coordinates remain as the label
   }, []);
 
-  // A pending "choose on map" wins; otherwise the first click sets the start
-  // and later clicks set (or move) the destination.
+  // A pending "choose on map" wins. Otherwise, planning by distance, a click
+  // moves the start; planning A → B, the first click sets the start and later
+  // clicks set (or move) the destination.
   const handleMapClick = useCallback(
     (point: LngLatPoint) => {
-      const which: Waypoint = picking ?? (start ? 'end' : 'start');
+      const which: Waypoint = picking ?? (mode === 'distance' || !start ? 'start' : 'end');
       placeWaypoint(which, point);
       setPicking(null);
     },
-    [picking, start, placeWaypoint],
+    [picking, mode, start, placeWaypoint],
   );
 
   const handleWaypointMoved = useCallback(
@@ -139,7 +213,7 @@ export default function App() {
   const handlePlaceSelected = (which: Waypoint, point: LngLatPoint, name: string) => {
     placeWaypoint(which, point, name);
     setPicking(null);
-    const other = which === 'start' ? end : start;
+    const other = mode === 'distance' ? null : which === 'start' ? end : start;
     setFocus({ points: other ? [point, other] : [point], id: Date.now() });
   };
 
@@ -150,7 +224,7 @@ export default function App() {
       ({ coords }) => {
         const point = { lng: coords.longitude, lat: coords.latitude };
         placeWaypoint('start', point);
-        setFocus({ points: end ? [point, end] : [point], id: Date.now() });
+        setFocus({ points: end && mode === 'a_to_b' ? [point, end] : [point], id: Date.now() });
         setLocating(false);
       },
       () => setLocating(false),
@@ -164,8 +238,9 @@ export default function App() {
       <MapView
         colorMode={colorMode}
         start={start}
-        end={end}
-        route={routeState.status === 'success' ? routeState.route : null}
+        end={mode === 'distance' ? finish : end}
+        endDraggable={mode === 'a_to_b'}
+        route={mapRoute}
         picking={picking !== null}
         focus={focus}
         onMapClick={handleMapClick}
@@ -188,42 +263,75 @@ export default function App() {
         {network?.status === 'loading' && <div className="alert">Building the routing network…</div>}
 
         <section>
+          <div className="segmented segmented-full" role="radiogroup" aria-label="How to plan">
+            {(
+              [
+                ['distance', 'Distance'],
+                ['a_to_b', 'A → B'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                className={mode === value ? 'active' : ''}
+                onClick={() => {
+                  updatePlan({ mode: value });
+                  setPicking(null);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <PlaceField
             badge="A"
             label="Start"
             point={start}
             placeName={startName}
-            near={end}
+            near={mode === 'a_to_b' ? end : null}
             picking={picking === 'start'}
             onSelect={(point, name) => handlePlaceSelected('start', point, name)}
             onPickOnMap={() => setPicking(picking === 'start' ? null : 'start')}
           />
-          <PlaceField
-            badge="B"
-            label="Destination"
-            point={end}
-            placeName={endName}
-            near={start}
-            picking={picking === 'end'}
-            onSelect={(point, name) => handlePlaceSelected('end', point, name)}
-            onPickOnMap={() => setPicking(picking === 'end' ? null : 'end')}
-          />
+          {mode === 'a_to_b' ? (
+            <PlaceField
+              badge="B"
+              label="Destination"
+              point={end}
+              placeName={endName}
+              near={start}
+              picking={picking === 'end'}
+              onSelect={(point, name) => handlePlaceSelected('end', point, name)}
+              onPickOnMap={() => setPicking(picking === 'end' ? null : 'end')}
+            />
+          ) : (
+            <DistanceControls
+              distanceText={plan.distanceText}
+              onDistanceTextChange={(distanceText) => updatePlan({ distanceText })}
+              shape={shape}
+              onShapeChange={(value) => updatePlan({ shape: value })}
+            />
+          )}
           <div className="button-row">
             <button type="button" onClick={useMyLocation} disabled={locating}>
               {locating ? 'Locating…' : 'Start from my location'}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setStart(end);
-                setEnd(start);
-                setStartName(endName);
-                setEndName(startName);
-              }}
-              disabled={!start || !end}
-            >
-              Swap
-            </button>
+            {mode === 'a_to_b' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStart(end);
+                  setEnd(start);
+                  setStartName(endName);
+                  setEndName(startName);
+                }}
+                disabled={!start || !end}
+              >
+                Swap
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -240,31 +348,82 @@ export default function App() {
 
         <Preferences
           profiles={profiles}
-          profileId={profileId}
-          onProfileChange={setProfileId}
+          activity={activity}
+          onActivityChange={(value) => updatePlan({ activity: value })}
           preferences={preferences}
           onChange={setPreferences}
         />
 
         <section aria-live="polite">
-          {routeState.status === 'loading' && <p className="hint">Finding a route…</p>}
-          {routeState.status === 'error' && (
-            <div className="alert alert-error">
-              {routeState.message}
-              {routeState.code === 'NO_ROUTE' && (
-                <p className="alert-hint">
-                  The bicycle network has gaps between some paths. Try points on longer connected routes, like the
-                  Capital City Trail or Bay Trail.
+          {mode === 'distance' ? (
+            <>
+              {distanceState.status === 'loading' && <p className="hint">Finding routes…</p>}
+              {distanceState.status === 'error' && <div className="alert alert-error">{distanceState.message}</div>}
+              {distanceRoute && (
+                <>
+                  {distanceRoutes.length > 1 && (
+                    <div className="alternatives">
+                      <button
+                        type="button"
+                        aria-label="Previous route"
+                        onClick={() => stepRoute(-1)}
+                      >
+                        ‹
+                      </button>
+                      <span>
+                        Option {routeIndex + 1} of {distanceRoutes.length} · heads{' '}
+                        {compassName(distanceRoute.properties.target.bearingDeg)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Next route"
+                        onClick={() => stepRoute(1)}
+                      >
+                        ›
+                      </button>
+                    </div>
+                  )}
+                  {Math.abs(distanceRoute.properties.target.distanceError) > 0.05 && (
+                    <p className="hint small">
+                      The closest to {formatDistance(distanceRoute.properties.target.distanceM)} the paths here allow.
+                    </p>
+                  )}
+                  <RouteSummary
+                    route={distanceRoute}
+                    onSurfaceChange={(surface) => setPreferences((current) => ({ ...current, surface }))}
+                  />
+                </>
+              )}
+              {distanceState.status === 'idle' && (
+                <p className="hint">
+                  {start
+                    ? 'Enter a distance to plan a route.'
+                    : 'Set a start: search for a place, click the map, or use your location.'}
                 </p>
               )}
-            </div>
-          )}
-          {routeState.status === 'success' && <RouteSummary
-              route={routeState.route}
-              onSurfaceChange={(surface) => setPreferences((current) => ({ ...current, surface }))}
-            />}
-          {routeState.status === 'idle' && (
-            <p className="hint">Tip: drag the A/B markers to adjust the route.</p>
+            </>
+          ) : (
+            <>
+              {routeState.status === 'loading' && <p className="hint">Finding a route…</p>}
+              {routeState.status === 'error' && (
+                <div className="alert alert-error">
+                  {routeState.message}
+                  {routeState.code === 'NO_ROUTE' && (
+                    <p className="alert-hint">
+                      The bicycle network has gaps between some paths. Try points on longer connected routes, like the
+                      Capital City Trail or Bay Trail.
+                    </p>
+                  )}
+                </div>
+              )}
+              {routeState.status === 'success' && (
+                <RouteSummary
+                  route={routeState.route}
+                  onSurfaceChange={(surface) => setPreferences((current) => ({ ...current, surface }))}
+                />
+              )}
+              {routeState.status === 'idle' && <p className="hint">Tip: drag the A/B markers to adjust the route.</p>}
+            </>
           )}
         </section>
 

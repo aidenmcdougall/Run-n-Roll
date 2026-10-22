@@ -34,3 +34,19 @@ export function segment(
     ...overrides,
   };
 }
+
+/**
+ * A 4 km × 4 km street grid with blocks of `spacingM`, centred on (0, 0).
+ * `override` customises individual segments, given their midpoint.
+ */
+export function grid(spacingM = 200, override: (midE: number, midN: number) => Partial<PathSegment> = () => ({})): PathSegment[] {
+  const half = 2000;
+  const segments: PathSegment[] = [];
+  for (let e = -half; e <= half; e += spacingM) {
+    for (let n = -half; n <= half; n += spacingM) {
+      if (e + spacingM <= half) segments.push(segment([[e, n], [e + spacingM, n]], 'shared_use_path', override(e + spacingM / 2, n)));
+      if (n + spacingM <= half) segments.push(segment([[e, n], [e, n + spacingM]], 'shared_use_path', override(e, n + spacingM / 2)));
+    }
+  }
+  return segments;
+}

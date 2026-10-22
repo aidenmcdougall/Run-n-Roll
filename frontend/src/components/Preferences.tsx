@@ -1,21 +1,28 @@
-import type { RoutePreferences, RoutingProfile, SurfacePreference } from '../api/types';
+import type { Activity, RoutePreferences, RoutingProfile, SurfacePreference } from '../api/types';
+
+export const ACTIVITY_OPTIONS: { value: Activity; label: string; icon: string }[] = [
+  { value: 'run', label: 'Run', icon: '🏃' },
+  { value: 'skate', label: 'Skate', icon: '🛼' },
+  { value: 'run_skate', label: 'Both', icon: '🏃🛼' },
+];
 
 const SURFACE_OPTIONS: { value: SurfacePreference; label: string; hint: string }[] = [
-  { value: 'any', label: 'Any', hint: 'No surface preference beyond the route style.' },
+  { value: 'any', label: 'Any', hint: 'No extra surface preference beyond the activity.' },
   { value: 'avoid_loose', label: 'No gravel', hint: 'Avoids gravel, dirt and grass. Good for road bikes and runners.' },
   { value: 'smooth_only', label: 'Smooth', hint: 'Sticks to asphalt and concrete where it can. Best for skating.' },
 ];
 
 interface PreferencesProps {
+  /** Profiles from the API, for the selected activity's description. */
   profiles: RoutingProfile[];
-  profileId: string | null;
-  onProfileChange: (id: string) => void;
+  activity: Activity;
+  onActivityChange: (activity: Activity) => void;
   preferences: RoutePreferences;
   onChange: (preferences: RoutePreferences) => void;
 }
 
-export function Preferences({ profiles, profileId, onProfileChange, preferences, onChange }: PreferencesProps) {
-  const selectedProfile = profiles.find((p) => p.id === profileId);
+export function Preferences({ profiles, activity, onActivityChange, preferences, onChange }: PreferencesProps) {
+  const selectedProfile = profiles.find((p) => p.id === activity);
   const surface = SURFACE_OPTIONS.find((o) => o.value === preferences.surface)!;
   const set = <K extends keyof RoutePreferences>(key: K, value: RoutePreferences[K]) => onChange({ ...preferences, [key]: value });
 
@@ -23,16 +30,23 @@ export function Preferences({ profiles, profileId, onProfileChange, preferences,
     <section className="preferences">
       <h2>Preferences</h2>
 
-      <label className="field">
-        <span>Route style</span>
-        <select value={profileId ?? ''} onChange={(e) => onProfileChange(e.target.value)} disabled={!profiles.length}>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
+      <div className="field">
+        <span>Activity</span>
+        <div className="segmented segmented-full" role="radiogroup" aria-label="Activity">
+          {ACTIVITY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={activity === option.value}
+              className={activity === option.value ? 'active' : ''}
+              onClick={() => onActivityChange(option.value)}
+            >
+              <span aria-hidden>{option.icon}</span> {option.label}
+            </button>
           ))}
-        </select>
-      </label>
+        </div>
+      </div>
       {selectedProfile && <p className="hint small">{selectedProfile.description}</p>}
 
       <div className="field">

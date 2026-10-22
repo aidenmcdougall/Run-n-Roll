@@ -62,6 +62,8 @@ export function RouteSummary({
     }))
     .sort(byLength);
   const inferredShare = distanceM > 0 ? inferredSurfaceM / distanceM : 0;
+  // Distance routes choose their own finish, so only the start's snap matters.
+  const isDistanceRoute = 'target' in route.properties;
 
   return (
     <div className="route-summary">
@@ -92,7 +94,13 @@ export function RouteSummary({
           {Math.round(inferredShare * 100)}% of the surface is assumed (untagged streets treated as sealed).
         </p>
       )}
-      {(snap.start.distanceM > 25 || snap.end.distanceM > 25) && (
+      {isDistanceRoute && snap.start.distanceM > 25 && (
+        <p className="hint">
+          The route joins the path network {formatDistance(snap.start.distanceM)} from your start
+          {preferences.surface !== 'any' ? ', at the nearest path matching your surface preference' : ''}.
+        </p>
+      )}
+      {!isDistanceRoute && (snap.start.distanceM > 25 || snap.end.distanceM > 25) && (
         <p className="hint">
           The route joins the path network {formatDistance(snap.start.distanceM)} from your start and{' '}
           {formatDistance(snap.end.distanceM)} from your destination

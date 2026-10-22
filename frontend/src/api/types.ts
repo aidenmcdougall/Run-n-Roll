@@ -103,6 +103,34 @@ export interface RouteFeature {
   };
 }
 
+/** Activity profiles: route ids accepted by the API's `profile` field (see backend routing/activities.ts). */
+export type Activity = 'run' | 'skate' | 'run_skate';
+
+/** Loop back to the start, or finish somewhere else. */
+export type RouteShape = 'loop' | 'one_way';
+
+/** A route from POST /api/routes/distance: a route plus how it matches the target. */
+export interface DistanceRouteFeature extends RouteFeature {
+  properties: RouteFeature['properties'] & {
+    target: {
+      distanceM: number;
+      shape: RouteShape;
+      /** The compass bearing the route heads out on. */
+      bearingDeg: number;
+      /** (distance − target) ÷ target. */
+      distanceError: number;
+      /** Metres travelled more than once. */
+      repeatedM: number;
+    };
+  };
+}
+
+export interface DistanceRoutesResponse {
+  type: 'FeatureCollection';
+  /** Best first. */
+  features: DistanceRouteFeature[];
+}
+
 export interface NetworkInfo {
   status: 'loading' | 'empty' | 'ready' | 'error';
   latestImport: { id: number; path_count: number; imported_at: string } | null;

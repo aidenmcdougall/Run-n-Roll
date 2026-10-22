@@ -166,3 +166,21 @@ code { font-size: 12px; background: rgba(0, 0, 0, 0.06); padding: 1px 4px; borde
 
 /* Crosshair while choosing a point (overrides the hover cursor set in MapView). */
 .maplibregl-canvas.is-picking { cursor: crosshair !important; }
+
+/* Planning by distance */
+.distance-controls { display: flex; flex-direction: column; gap: 8px; }
+.distance-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.distance-input {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--fg); font-size: 14px;
+}
+.distance-input:focus-within { border-color: var(--fg); }
+.distance-input.invalid { border-color: #dc2626; }
+.distance-input input { width: 4.5em; padding: 6px 0; border: 0; outline: none; font: inherit; background: transparent; font-variant-numeric: tabular-nums; }
+.chip { padding: 4px 9px; font-size: 12px; border-radius: 999px; }
+.chip.active { background: var(--fg); border-color: var(--fg); color: #fff; }
+.field-error { color: #dc2626; font-size: 12px; }
+.alternatives { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.alternatives button { padding: 2px 12px; font-size: 16px; line-height: 1.4; }
+.waypoint-marker.fixed { cursor: default; }
+.chip.active:hover:not(:disabled) { background: var(--fg); color: #fff; }

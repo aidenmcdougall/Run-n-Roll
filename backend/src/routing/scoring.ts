@@ -44,7 +44,7 @@ export type RouteScores = Record<Activity, ActivityScore>;
 
 type Table<K extends string> = Readonly<Record<K, number>>;
 
-interface ActivityModel {
+export interface ActivityModel {
   surface: Table<SurfaceClass>;
   /** Replaces the surface factor when OSM smoothness is tagged (skating only). */
   smoothness?: Table<Smoothness>;
